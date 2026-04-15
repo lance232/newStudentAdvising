@@ -137,6 +137,7 @@ export function Login({ onLogin }: LoginProps) {
 
     const data = payload as { setupToken?: string };
     setSetupState({ username, setupToken: data.setupToken });
+    setIdentifier(username);
     setMode('set-password');
     setSuccess('First login detected. Please set your password to continue.');
   };
@@ -173,6 +174,7 @@ export function Login({ onLogin }: LoginProps) {
       if (response.status === 428 || loginData.requiresPasswordSetup) {
         if (loginData.setupToken) {
           setSetupState({ username: identifier, setupToken: loginData.setupToken });
+          setIdentifier(identifier);
           setMode('set-password');
           setSuccess('First login detected. Please set your password to continue.');
         } else {
@@ -249,7 +251,11 @@ export function Login({ onLogin }: LoginProps) {
     setError('');
     setSuccess('');
 
-    const setupUsername = setupState?.username || identifier;
+    const setupUsername = identifier.trim() || setupState?.username || '';
+    const setupToken =
+      setupState?.username && setupState.username === setupUsername
+        ? setupState.setupToken
+        : undefined;
 
     if (!setupUsername) {
       setError('Missing account identifier for password setup.');
@@ -279,7 +285,7 @@ export function Login({ onLogin }: LoginProps) {
           password: newPassword,
           newPassword,
           confirmPassword,
-          setupToken: setupState?.setupToken,
+          setupToken,
         }),
       });
 
@@ -351,9 +357,9 @@ export function Login({ onLogin }: LoginProps) {
 
         <section className="mx-auto w-full max-w-md rounded-2xl border border-[#e3e6e8] bg-white p-7 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.6)] md:p-8">
           <p className="mb-1 text-sm font-semibold text-[#157150]">University of San Jose - Recoletos</p>
-          <h3 className="text-[32px] font-bold leading-tight text-[#1f2937]">{mode === 'login' ? 'Welcome Back' : 'Set Your Password'}</h3>
+          <h3 className="text-[32px] font-bold leading-tight text-[#1f2937]">{mode === 'login' ? 'Welcome Back' : 'Set Your First-Time Password'}</h3>
           <p className="mb-6 text-sm text-[#657382]">
-            {mode === 'login' ? 'Sign in using your official ID and password' : 'First login detected: create your permanent password'}
+            {mode === 'login' ? 'Sign in using your official ID and password' : 'First login detected: enter your ID and create your permanent password'}
           </p>
 
           {error && (
@@ -444,7 +450,24 @@ export function Login({ onLogin }: LoginProps) {
           ) : (
             <form onSubmit={handleSetPasswordSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="newPassword">New Password</Label>
+                <Label htmlFor="setupIdentifier">Official ID (Username)</Label>
+                <div className="relative">
+                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a1af]" />
+                  <Input
+                    id="setupIdentifier"
+                    type="text"
+                    placeholder="Enter your official ID"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    className="h-11 border-[#e4e8eb] bg-[#f7f9fb] pl-10"
+                    disabled={isLoading}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="newPassword">First-Time Password</Label>
                 <div className="relative">
                   <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a1af]" />
                   <Input
@@ -452,7 +475,7 @@ export function Login({ onLogin }: LoginProps) {
                     type={showPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Create your new password"
+                    placeholder="Create your first-time password"
                     className="h-11 border-[#e4e8eb] bg-[#f7f9fb] pl-10 pr-10"
                     disabled={isLoading}
                   />
@@ -475,13 +498,13 @@ export function Login({ onLogin }: LoginProps) {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">Confirm First-Time Password</Label>
                 <Input
                   id="confirmPassword"
                   type={showPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
+                  placeholder="Confirm first-time password"
                   className="h-11 border-[#e4e8eb] bg-[#f7f9fb]"
                   disabled={isLoading}
                 />

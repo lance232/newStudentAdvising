@@ -14,6 +14,7 @@ export function Settings() {
   const [email, setEmail] = useState("m.santos@usjr.edu.ph");
   const [phone, setPhone] = useState("(032) 234-5678");
   const [department, setDepartment] = useState("Computer Engineering");
+  const [passwordUserId, setPasswordUserId] = useState("");
   
   // Time slot availability state for each day
   const [availability, setAvailability] = useState({
@@ -229,36 +230,38 @@ export function Settings() {
         <TabsContent value="security" className="space-y-6">
           <Card className="border-green-200 shadow-md">
             <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
-              <CardTitle className="text-green-900">Security & Password</CardTitle>
-              <CardDescription>Manage your account security settings</CardDescription>
+              <CardTitle className="text-green-900">Security & First-Time Password</CardTitle>
+              <CardDescription>Set your first-time password using your account ID</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6 pt-6">
               <div className="space-y-2">
-                <Label htmlFor="current-password">Current Password</Label>
+                <Label htmlFor="password-user-id">User ID</Label>
                 <Input
-                  id="current-password"
+                  id="password-user-id"
+                  value={passwordUserId}
+                  onChange={(e) => setPasswordUserId(e.target.value)}
+                  placeholder="Enter or confirm your ID"
+                  className="border-gray-300"
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="first-time-password">First-Time Password</Label>
+                <Input
+                  id="first-time-password"
                   type="password"
-                  placeholder="Enter current password"
+                  placeholder="Enter first-time password"
                   className="border-gray-300"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="new-password">New Password</Label>
+                <Label htmlFor="confirm-first-time-password">Confirm First-Time Password</Label>
                 <Input
-                  id="new-password"
+                  id="confirm-first-time-password"
                   type="password"
-                  placeholder="Enter new password"
-                  className="border-gray-300"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="confirm-password">Confirm New Password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  placeholder="Confirm new password"
+                  placeholder="Confirm first-time password"
                   className="border-gray-300"
                 />
               </div>
@@ -276,7 +279,7 @@ export function Settings() {
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <Button variant="outline">Cancel</Button>
                 <Button className="bg-gradient-to-r from-green-600 to-yellow-500 hover:from-green-700 hover:to-yellow-600 text-white">
-                  Update Password
+                  Set First-Time Password
                 </Button>
               </div>
             </CardContent>
