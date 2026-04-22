@@ -1,20 +1,39 @@
-import { useMemo, useState } from 'react';
+import axios from 'axios';
+import { useEffect, useState } from 'react';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
-import { AlertCircle, BookOpen, CheckCircle2, Eye, EyeOff, Lock, Radar, UserRound, XCircle } from 'lucide-react';
+import { AlertCircle, BookOpen, CheckCircle2, Eye, EyeOff, Lock, Radar, UserRound } from 'lucide-react';
 import usjrLogo from '../../../usjr logo.jpg';
+import { forgotPasswordStart, resetPassword } from '../services/auth-api';
+import type { ForgotPasswordStartResponse } from '../models/auth';
+import { ForgotPasswordStart } from './forgot-password-start';
+import { ResetPassword } from './reset-password';
+import { Toaster as SonnerToaster, toast } from 'sonner';
 
 interface LoginProps {
   onLogin: (role: 'adviser' | 'student' | 'chairman' | 'admin', userData?: { name: string; id: string }) => void;
 }
 
 type AppRole = 'adviser' | 'student' | 'chairman' | 'admin';
-type AuthMode = 'login' | 'set-password';
+type AuthRoute = 'login' | 'forgot-password' | 'reset-password';
 
-interface SetupState {
-  username: string;
-  setupToken?: string;
+const AUTH_ROUTE_PATHS: Record<AuthRoute, string> = {
+  login: '/',
+  'forgot-password': '/forgot-password',
+  'reset-password': '/reset-password',
+};
+
+function getAuthRouteFromPath(pathname: string): AuthRoute {
+  if (pathname === AUTH_ROUTE_PATHS['forgot-password']) {
+    return 'forgot-password';
+  }
+
+  if (pathname === AUTH_ROUTE_PATHS['reset-password']) {
+    return 'reset-password';
+  }
+
+  return 'login';
 }
 
 const API_BASE_URL =
@@ -88,8 +107,6 @@ function getErrorMessage(payload: unknown, fallback: string): string {
     message?: string;
     error?: string;
     title?: string;
-    requiresPasswordSetup?: boolean;
-    setupToken?: string;
   };
   return data.message || data.error || data.title || fallback;
 }
@@ -105,7 +122,7 @@ function getPasswordRules(password: string) {
 }
 
 export function Login({ onLogin }: LoginProps) {
-  const [mode, setMode] = useState<AuthMode>('login');
+  const [authRoute, setAuthRoute] = useState<AuthRoute>(() => getAuthRouteFromPath(window.location.pathname));
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -114,32 +131,108 @@ export function Login({ onLogin }: LoginProps) {
   const [success, setSuccess] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const [setupState, setSetupState] = useState<SetupState | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [forgotPasswordMessage, setForgotPasswordMessage] = useState('');
+  const [forgotPasswordError, setForgotPasswordError] = useState('');
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [forgotPasswordUsername, setForgotPasswordUsername] = useState('');
+  const [canContinueForgotPassword, setCanContinueForgotPassword] = useState(false);
+  const [isForgotPasswordLoading, setIsForgotPasswordLoading] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState('');
+  const [isResetPasswordLoading, setIsResetPasswordLoading] = useState(false);
 
-  const passwordRules = useMemo(() => getPasswordRules(newPassword), [newPassword]);
-  const isPasswordValid = Object.values(passwordRules).every(Boolean);
+  useEffect(() => {
+    const onPopState = () => {
+      setAuthRoute(getAuthRouteFromPath(window.location.pathname));
+    };
 
-  const startFirstLoginSetup = async (username: string) => {
-    const response = await fetchWithApiFallback('/auth/first-login/start', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username }),
-    });
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(getErrorMessage(payload, 'Unable to start first login setup.'));
+  const navigateToAuthRoute = (route: AuthRoute, replace = false) => {
+    const path = AUTH_ROUTE_PATHS[route];
+    if (window.location.pathname !== path) {
+      if (replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
     }
 
-    const data = payload as { setupToken?: string };
-    setSetupState({ username, setupToken: data.setupToken });
-    setIdentifier(username);
-    setMode('set-password');
-    setSuccess('First login detected. Please set your password to continue.');
+    setAuthRoute(route);
+  };
+
+  const getAxiosErrorMessage = (err: unknown, fallback: string): string => {
+    if (!axios.isAxiosError(err)) {
+      return fallback;
+    }
+
+    const payload = err.response?.data as
+      | {
+          message?: string;
+          Message?: string;
+          error?: string;
+          detail?: string;
+          title?: string;
+          errors?: Record<string, string[]>;
+        }
+      | string
+      | undefined;
+
+    if (typeof payload === 'string') {
+      return payload || fallback;
+    }
+
+    const validationError = payload?.errors
+      ? Object.values(payload.errors).flat().find(Boolean)
+      : undefined;
+
+    return payload?.message || payload?.Message || payload?.error || payload?.detail || validationError || payload?.title || fallback;
+  };
+
+  const canProceedWithForgotPassword = (
+    response: {
+      message?: string;
+      canProceed?: boolean;
+      emailExists?: boolean;
+      exists?: boolean;
+      success?: boolean;
+    },
+  ): boolean => {
+    if (typeof response.canProceed === 'boolean') {
+      return response.canProceed;
+    }
+
+    if (typeof response.emailExists === 'boolean') {
+      return response.emailExists;
+    }
+
+    if (typeof response.exists === 'boolean') {
+      return response.exists;
+    }
+
+    if (typeof response.success === 'boolean') {
+      return response.success;
+    }
+
+    const message = (response.message || '').toLowerCase();
+    if (message.includes('not found') || message.includes('does not exist') || message.includes('invalid')) {
+      return false;
+    }
+
+    // If backend does not send an explicit boolean, treat a successful response as proceed.
+    // This keeps compatibility with APIs that intentionally return generic success messages.
+    return true;
+  };
+
+  const getForgotPasswordUsername = (response: ForgotPasswordStartResponse): string => {
+    return (
+      response.username?.trim() ||
+      response.userName?.trim() ||
+      response.Username?.trim() ||
+      response.UserName?.trim() ||
+      ''
+    );
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -153,7 +246,7 @@ export function Login({ onLogin }: LoginProps) {
     }
 
     if (!password) {
-      setError('Please enter your password. If this is your first login, use Set Password First.');
+      setError('Please enter your password.');
       return;
     }
 
@@ -170,21 +263,8 @@ export function Login({ onLogin }: LoginProps) {
 
       const payload = await response.json().catch(() => ({}));
 
-      const loginData = payload as { requiresPasswordSetup?: boolean; setupToken?: string };
-      if (response.status === 428 || loginData.requiresPasswordSetup) {
-        if (loginData.setupToken) {
-          setSetupState({ username: identifier, setupToken: loginData.setupToken });
-          setIdentifier(identifier);
-          setMode('set-password');
-          setSuccess('First login detected. Please set your password to continue.');
-        } else {
-          await startFirstLoginSetup(identifier);
-        }
-        return;
-      }
-
       if (response.status === 401) {
-        throw new Error('Invalid username or password. If this is your first login, click Set Password First.');
+        throw new Error('Invalid username or password.');
       }
 
       if (!response.ok) {
@@ -246,77 +326,91 @@ export function Login({ onLogin }: LoginProps) {
     }
   };
 
-  const handleSetPasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
+  const handleForgotPasswordStart = async (email: string) => {
+    setForgotPasswordError('');
+    setForgotPasswordMessage('');
+    setCanContinueForgotPassword(false);
+    setForgotPasswordEmail('');
+    setForgotPasswordUsername('');
 
-    const setupUsername = identifier.trim() || setupState?.username || '';
-    const setupToken =
-      setupState?.username && setupState.username === setupUsername
-        ? setupState.setupToken
-        : undefined;
-
-    if (!setupUsername) {
-      setError('Missing account identifier for password setup.');
+    if (!email) {
+      setForgotPasswordError('Please enter your email address.');
       return;
     }
 
-    if (!isPasswordValid) {
-      setError('Password does not meet all required rules.');
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setIsLoading(true);
+    setIsForgotPasswordLoading(true);
 
     try {
-      const response = await fetchWithApiFallback('/auth/first-login/set-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: setupUsername,
-          password: newPassword,
-          newPassword,
-          confirmPassword,
-          setupToken,
-        }),
-      });
+      const response = await forgotPasswordStart(email);
+      const canProceed = canProceedWithForgotPassword(response);
 
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, 'Unable to set password for first login.'));
+      if (!canProceed) {
+        setForgotPasswordError(response.message || 'Email address was not found.');
+        return;
       }
 
-      setSuccess('Password set successfully. You can now sign in normally.');
-      setMode('login');
-      setIdentifier(setupUsername);
-      setPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setSetupState(null);
+      setForgotPasswordEmail(email);
+      setForgotPasswordUsername(getForgotPasswordUsername(response));
+      setCanContinueForgotPassword(true);
+      setForgotPasswordMessage(response.message || 'If the email exists in our system, you can proceed to set a new password.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to set password for first login.');
+      if (axios.isAxiosError(err) && err.response?.status === 400) {
+        setForgotPasswordError(getAxiosErrorMessage(err, 'Please check the submitted data.'));
+      } else {
+        setForgotPasswordError(getAxiosErrorMessage(err, 'Unable to process forgot password request.'));
+      }
     } finally {
-      setIsLoading(false);
+      setIsForgotPasswordLoading(false);
     }
   };
 
-  const PasswordRule = ({ passed, label }: { passed: boolean; label: string }) => (
-    <li className={`flex items-center gap-2 text-xs ${passed ? 'text-green-700' : 'text-gray-500'}`}>
-      {passed ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
-      <span>{label}</span>
-    </li>
-  );
+  const handleResetPassword = async (payload: { email: string; newPassword: string; confirmPassword: string }) => {
+    setResetPasswordError('');
+
+    if (!payload.email) {
+      setResetPasswordError('Email is required.');
+      return;
+    }
+
+    if (!getPasswordRules(payload.newPassword).minLength || !getPasswordRules(payload.newPassword).hasUppercase || !getPasswordRules(payload.newPassword).hasLetter || !getPasswordRules(payload.newPassword).hasNumber || !getPasswordRules(payload.newPassword).hasSpecial) {
+      setResetPasswordError('Password does not meet all required rules.');
+      return;
+    }
+
+    if (payload.newPassword !== payload.confirmPassword) {
+      setResetPasswordError('Passwords do not match.');
+      return;
+    }
+
+    setIsResetPasswordLoading(true);
+
+    try {
+      const response = await resetPassword(payload.email, payload.newPassword, payload.confirmPassword);
+      const successMessage = response.message || 'Password reset successfully. You can now sign in.';
+      toast.success(successMessage);
+      setSuccess(successMessage);
+      
+      // Auto-redirect to login after 2-3 seconds
+      setTimeout(() => {
+        navigateToAuthRoute('login', true);
+        setForgotPasswordEmail('');
+        setForgotPasswordUsername('');
+        setCanContinueForgotPassword(false);
+      }, 2500);
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 400) {
+        setResetPasswordError(getAxiosErrorMessage(err, 'Please check the submitted data.'));
+      } else {
+        setResetPasswordError(getAxiosErrorMessage(err, 'Unable to reset password.'));
+      }
+    } finally {
+      setIsResetPasswordLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f1f3f2] px-4 py-8 md:px-8 md:py-12">
+      <SonnerToaster richColors position="top-right" />
       <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
         <section className="hidden lg:block">
           <div className="mb-12 flex items-center gap-4">
@@ -332,7 +426,7 @@ export function Login({ onLogin }: LoginProps) {
           <div className="space-y-3">
             <h2 className="text-[40px] font-bold leading-tight text-[#223246]">Secure Academic Access</h2>
             <p className="max-w-xl text-[15px] leading-relaxed text-[#526172]">
-              Accounts are pre-registered by admin using official IDs. On first login, users are required to set a strong password before accessing the system.
+              Accounts are pre-registered by admin using official IDs and email. Users can sign in directly and recover account access through the forgot password flow.
             </p>
           </div>
 
@@ -349,34 +443,86 @@ export function Login({ onLogin }: LoginProps) {
               <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#fff7e6] text-[#c58a00]">
                 <Radar className="h-5 w-5" />
               </div>
-              <p className="font-semibold text-[#223246]">Forced First Password</p>
-              <p className="mt-1 text-xs leading-relaxed text-[#5f6f80]">New accounts must set a strong password before normal login.</p>
+              <p className="font-semibold text-[#223246]">Account Recovery</p>
+              <p className="mt-1 text-xs leading-relaxed text-[#5f6f80]">Forgot password helps users reset and regain access securely.</p>
             </div>
           </div>
         </section>
 
         <section className="mx-auto w-full max-w-md rounded-2xl border border-[#e3e6e8] bg-white p-7 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.6)] md:p-8">
           <p className="mb-1 text-sm font-semibold text-[#157150]">University of San Jose - Recoletos</p>
-          <h3 className="text-[32px] font-bold leading-tight text-[#1f2937]">{mode === 'login' ? 'Welcome Back' : 'Set Your First-Time Password'}</h3>
+          <h3 className="text-[32px] font-bold leading-tight text-[#1f2937]">
+            {authRoute === 'forgot-password'
+              ? 'Forgot Password'
+              : authRoute === 'reset-password'
+                ? 'Reset Password'
+                : 'Welcome Back'}
+          </h3>
           <p className="mb-6 text-sm text-[#657382]">
-            {mode === 'login' ? 'Sign in using your official ID and password' : 'First login detected: enter your ID and create your permanent password'}
+            {authRoute === 'forgot-password'
+              ? 'Step 1 of 2: enter your email address to start password reset'
+              : authRoute === 'reset-password'
+                ? 'Step 2 of 2: set your new password'
+                : 'Sign in using your official ID and password'}
           </p>
 
-          {error && (
+          {authRoute === 'login' && error && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          {success && (
+          {authRoute === 'login' && success && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
               <span>{success}</span>
             </div>
           )}
 
-          {mode === 'login' ? (
+          {authRoute === 'forgot-password' && (
+            <ForgotPasswordStart
+              isLoading={isForgotPasswordLoading}
+              error={forgotPasswordError}
+              message={forgotPasswordMessage}
+              canContinue={canContinueForgotPassword}
+              onSubmit={handleForgotPasswordStart}
+              onContinueToReset={() => {
+                if (!canContinueForgotPassword || !forgotPasswordEmail) {
+                  setForgotPasswordError('Please enter a valid registered email address.');
+                  return;
+                }
+
+                setResetPasswordError('');
+                navigateToAuthRoute('reset-password');
+              }}
+              onBackToLogin={() => {
+                setForgotPasswordError('');
+                setForgotPasswordMessage('');
+                setCanContinueForgotPassword(false);
+                setForgotPasswordEmail('');
+                setForgotPasswordUsername('');
+                navigateToAuthRoute('login');
+              }}
+            />
+          )}
+
+          {authRoute === 'reset-password' && (
+            <ResetPassword
+              isLoading={isResetPasswordLoading}
+              error={resetPasswordError}
+              success=""
+              email={forgotPasswordEmail}
+              accountUsername={forgotPasswordUsername}
+              onSubmit={handleResetPassword}
+              onBack={() => {
+                setResetPasswordError('');
+                navigateToAuthRoute('forgot-password');
+              }}
+            />
+          )}
+
+          {authRoute === 'login' && (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="identifier">Official ID (Username)</Label>
@@ -428,16 +574,23 @@ export function Login({ onLogin }: LoginProps) {
                   />
                   Remember me
                 </label>
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto p-0 text-xs text-[#157150]"
-                  disabled={isLoading || !identifier}
-                  onClick={() => startFirstLoginSetup(identifier)}
-                >
-                  Set Password First
-                </Button>
               </div>
+
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto p-0 text-xs text-[#157150]"
+                disabled={isLoading}
+                onClick={() => {
+                  setForgotPasswordError('');
+                  setForgotPasswordMessage('');
+                  setCanContinueForgotPassword(false);
+                  setForgotPasswordEmail('');
+                  navigateToAuthRoute('forgot-password');
+                }}
+              >
+                Forgot Password?
+              </Button>
 
               <Button
                 type="submit"
@@ -445,91 +598,6 @@ export function Login({ onLogin }: LoginProps) {
                 disabled={isLoading}
               >
                 {isLoading ? 'Signing in...' : 'Sign In'}
-              </Button>
-            </form>
-          ) : (
-            <form onSubmit={handleSetPasswordSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="setupIdentifier">Official ID (Username)</Label>
-                <div className="relative">
-                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a1af]" />
-                  <Input
-                    id="setupIdentifier"
-                    type="text"
-                    placeholder="Enter your official ID"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
-                    className="h-11 border-[#e4e8eb] bg-[#f7f9fb] pl-10"
-                    disabled={isLoading}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newPassword">First-Time Password</Label>
-                <div className="relative">
-                  <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#93a1af]" />
-                  <Input
-                    id="newPassword"
-                    type={showPassword ? 'text' : 'password'}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Create your first-time password"
-                    className="h-11 border-[#e4e8eb] bg-[#f7f9fb] pl-10 pr-10"
-                    disabled={isLoading}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#95a2af] hover:text-[#617080]"
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-
-                <ul className="grid grid-cols-1 gap-1 rounded-md border border-[#e6eaee] bg-[#fbfcfd] p-3 sm:grid-cols-2">
-                  <PasswordRule passed={passwordRules.minLength} label="At least 6 characters" />
-                  <PasswordRule passed={passwordRules.hasUppercase} label="At least one uppercase letter" />
-                  <PasswordRule passed={passwordRules.hasLetter} label="Contains letters" />
-                  <PasswordRule passed={passwordRules.hasNumber} label="Contains numbers" />
-                  <PasswordRule passed={passwordRules.hasSpecial} label="At least one special character" />
-                </ul>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm First-Time Password</Label>
-                <Input
-                  id="confirmPassword"
-                  type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm first-time password"
-                  className="h-11 border-[#e4e8eb] bg-[#f7f9fb]"
-                  disabled={isLoading}
-                />
-              </div>
-
-              <Button
-                type="submit"
-                className="h-11 w-full bg-gradient-to-r from-[#08a13f] to-[#d4a200] text-white hover:from-[#079038] hover:to-[#c09100]"
-                disabled={isLoading}
-              >
-                {isLoading ? 'Saving password...' : 'Save Password'}
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 w-full"
-                onClick={() => {
-                  setMode('login');
-                  setError('');
-                  setSuccess('');
-                }}
-                disabled={isLoading}
-              >
-                Back to Sign In
               </Button>
             </form>
           )}

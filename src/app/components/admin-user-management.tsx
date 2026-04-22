@@ -5,6 +5,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
 import { CheckCircle2, Plus, ShieldCheck, Trash2, UserCog, Users, XCircle } from 'lucide-react';
 
 type AdminRole = 'ADMIN' | 'CHAIRMAN' | 'ADVISER' | 'STUDENT';
@@ -20,14 +30,56 @@ interface ManagedUser {
 
 interface CreateUserPayload {
   username: string;
+  email: string;
   firstName: string;
   lastName: string;
   role: AdminRole;
-  yearLevel?: string | null;
+  yearLevelId?: string | null;
+}
+
+interface YearLevelOption {
+  id: string;
+  label: string;
 }
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
+
+function getApiBaseCandidates(): string[] {
+  const candidates: string[] = [];
+
+  if (API_BASE_URL) {
+    candidates.push(API_BASE_URL);
+  }
+
+  if (API_BASE_URL.endsWith('/api')) {
+    candidates.push(API_BASE_URL.slice(0, -4));
+  } else {
+    candidates.push(`${API_BASE_URL}/api`);
+  }
+
+  return Array.from(new Set(candidates.map((value) => value.replace(/\/$/, ''))));
+}
+
+async function fetchWithApiFallback(path: string, init?: RequestInit): Promise<Response> {
+  const bases = getApiBaseCandidates();
+  let lastResponse: Response | null = null;
+
+  for (const base of bases) {
+    const response = await fetch(`${base}${path}`, init);
+    if (response.status !== 404) {
+      return response;
+    }
+
+    lastResponse = response;
+  }
+
+  if (lastResponse) {
+    return lastResponse;
+  }
+
+  throw new Error('Unable to reach year level endpoint.');
+}
 
 function getAuthToken(): string | null {
   const rawToken = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
@@ -58,13 +110,65 @@ export function AdminUserManagement() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [search, setSearch] = useState('');
+  const [yearLevels, setYearLevels] = useState<YearLevelOption[]>([]);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<ManagedUser | null>(null);
   const [newUser, setNewUser] = useState<CreateUserPayload>({
     username: '',
+    email: '',
     firstName: '',
     lastName: '',
     role: 'STUDENT',
-    yearLevel: '1st Year',
+    yearLevelId: null,
   });
+
+  const loadYearLevels = async () => {
+    try {
+      const token = getAuthToken();
+      const response = await fetchWithApiFallback('/Students/year-levels', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const payload = await response.json().catch(() => ([]));
+      if (!response.ok) {
+        return;
+      }
+
+      const rows = Array.isArray(payload) ? payload : [];
+      const normalized = rows
+        .map((item: any) => {
+          const id = String(item.yearLevelId ?? item.id ?? item.value ?? '').trim();
+          const label = String(item.yearLevelName ?? item.name ?? item.yearLevel ?? item.label ?? '').trim();
+          if (!id) {
+            return null;
+          }
+
+          return {
+            id,
+            label: label || `Year Level ${id}`,
+          };
+        })
+        .filter((item: YearLevelOption | null): item is YearLevelOption => Boolean(item));
+
+      setYearLevels(normalized);
+      if (normalized.length > 0) {
+        setNewUser((prev) => {
+          if (prev.role !== 'STUDENT' || prev.yearLevelId) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            yearLevelId: normalized[0].id,
+          };
+        });
+      }
+    } catch {
+      // Keep create form available even if year-level endpoint is down.
+    }
+  };
 
   const loadUsers = async () => {
     setIsLoading(true);
@@ -107,6 +211,7 @@ export function AdminUserManagement() {
 
   useEffect(() => {
     loadUsers();
+    loadYearLevels();
   }, []);
 
   const filteredUsers = useMemo(() => {
@@ -129,8 +234,13 @@ export function AdminUserManagement() {
     setError('');
     setSuccess('');
 
-    if (!newUser.username || !newUser.firstName || !newUser.lastName) {
+    if (!newUser.username || !newUser.email || !newUser.firstName || !newUser.lastName) {
       setError('Please complete all required fields.');
+      return;
+    }
+
+    if (newUser.role === 'STUDENT' && !newUser.yearLevelId) {
+      setError('Year level is required when creating a student account.');
       return;
     }
 
@@ -143,8 +253,14 @@ export function AdminUserManagement() {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          ...newUser,
-          yearLevel: newUser.role === 'STUDENT' ? newUser.yearLevel : null,
+          username: newUser.username,
+          email: newUser.email,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          role: newUser.role,
+          yearLevelId: newUser.role === 'STUDENT' && newUser.yearLevelId
+            ? Number(newUser.yearLevelId)
+            : null,
         }),
       });
 
@@ -156,10 +272,11 @@ export function AdminUserManagement() {
       setSuccess('User created successfully.');
       setNewUser({
         username: '',
+        email: '',
         firstName: '',
         lastName: '',
         role: 'STUDENT',
-        yearLevel: '1st Year',
+        yearLevelId: yearLevels[0]?.id ?? null,
       });
 
       await loadUsers();
@@ -191,6 +308,21 @@ export function AdminUserManagement() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete user.');
     }
+  };
+
+  const openDeleteDialog = (user: ManagedUser) => {
+    setPendingDeleteUser(user);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteUser) {
+      return;
+    }
+
+    await handleDeleteUser(pendingDeleteUser.id);
+    setIsDeleteDialogOpen(false);
+    setPendingDeleteUser(null);
   };
 
   const handleRoleChange = async (id: number | string, role: AdminRole) => {
@@ -334,6 +466,16 @@ export function AdminUserManagement() {
               />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="admin-user-email">Email Address</Label>
+              <Input
+                id="admin-user-email"
+                type="email"
+                value={newUser.email}
+                onChange={(e) => setNewUser((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="juan@example.com"
+              />
+            </div>
+            <div className="space-y-2">
               <Label>Role</Label>
               <Select
                 value={newUser.role}
@@ -341,7 +483,7 @@ export function AdminUserManagement() {
                   setNewUser((prev) => ({
                     ...prev,
                     role: value,
-                    yearLevel: value === 'STUDENT' ? prev.yearLevel ?? '1st Year' : null,
+                    yearLevelId: value === 'STUDENT' ? prev.yearLevelId ?? yearLevels[0]?.id ?? null : null,
                   }))
                 }
               >
@@ -360,17 +502,20 @@ export function AdminUserManagement() {
               <div className="space-y-2">
                 <Label>Year Level</Label>
                 <Select
-                  value={newUser.yearLevel ?? '1st Year'}
-                  onValueChange={(value) => setNewUser((prev) => ({ ...prev, yearLevel: value }))}
+                  value={newUser.yearLevelId ?? ''}
+                  onValueChange={(value) => setNewUser((prev) => ({ ...prev, yearLevelId: value }))}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder={yearLevels.length === 0 ? 'No year levels available' : 'Select year level'} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1st Year">1st Year</SelectItem>
-                    <SelectItem value="2nd Year">2nd Year</SelectItem>
-                    <SelectItem value="3rd Year">3rd Year</SelectItem>
-                    <SelectItem value="4th Year">4th Year</SelectItem>
+                    {yearLevels.length === 0 ? (
+                      <SelectItem value="__none" disabled>No year levels available</SelectItem>
+                    ) : (
+                      yearLevels.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -440,7 +585,7 @@ export function AdminUserManagement() {
                     <Button
                       variant="outline"
                       className="border-red-200 text-red-600 hover:bg-red-50"
-                      onClick={() => handleDeleteUser(user.id)}
+                      onClick={() => openDeleteDialog(user)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -451,6 +596,38 @@ export function AdminUserManagement() {
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDialogOpen(open);
+          if (!open) {
+            setPendingDeleteUser(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. Are you sure you want to delete the account for{' '}
+              <span className="font-semibold text-foreground">
+                {pendingDeleteUser ? `${pendingDeleteUser.firstName} ${pendingDeleteUser.lastName}`.trim() || pendingDeleteUser.username : 'this user'}
+              </span>
+              ?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleConfirmDelete}
+            >
+              Yes, Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

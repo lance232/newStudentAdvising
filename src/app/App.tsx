@@ -67,10 +67,10 @@ export default function App() {
   const [studentView, setStudentView] = useState<StudentViewType>('dashboard');
   const [chairmanView, setChairmanView] = useState<ChairmanViewType>('dashboard');
   const [adminView, setAdminView] = useState<AdminViewType>('users');
-  const [selectedStudent, setSelectedStudent] = useState<number | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<number | string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const handleSelectStudent = (studentId: number) => {
+  const handleSelectStudent = (studentId: number | string) => {
     setSelectedStudent(studentId);
     setAdviserView('profile');
     setSidebarOpen(false);
@@ -132,7 +132,7 @@ export default function App() {
       case 'students':
         return <StudentList onSelectStudent={handleSelectStudent} />;
       case 'profile':
-        return <StudentProfile onBack={handleBackToList} />;
+        return <StudentProfile onBack={handleBackToList} studentId={selectedStudent} />;
       case 'student-management':
         return <StudentManagement />;
       case 'grade-input':
@@ -153,25 +153,18 @@ export default function App() {
       case 'dashboard':
         return (
           <StudentDashboard
-            studentName={currentUser.name}
-            studentId={currentUser.id || 'Not Available'}
-            yearLevel="BSCPE-3"
             onBookAppointment={() => handleStudentNavigation('booking')}
           />
         );
       case 'booking':
         return (
           <StudentAppointmentBooking
-            adviserName="Dr. Maria Santos"
             onBack={() => handleStudentNavigation('dashboard')}
           />
         );
       default:
         return (
           <StudentDashboard
-            studentName={currentUser.name}
-            studentId={currentUser.id || 'Not Available'}
-            yearLevel="BSCPE-3"
             onBookAppointment={() => handleStudentNavigation('booking')}
           />
         );

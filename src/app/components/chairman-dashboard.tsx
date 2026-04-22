@@ -5,6 +5,7 @@ import { Badge } from './ui/badge';
 import { Check, Users, UserCog, XCircle } from 'lucide-react';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 interface Advisor {
   id: number | string;
@@ -12,7 +13,14 @@ interface Advisor {
   email: string;
   advisorId: string;
   assignedYearLevel: string | null;
+  assignedYearLevelId?: number | string | null;
+  assignmentId?: number | string | null;
   status: 'active' | 'inactive';
+}
+
+interface YearLevelOption {
+  id: string;
+  label: string;
 }
 
 const API_BASE_URL =
@@ -54,27 +62,37 @@ async function fetchWithApiFallback(path: string, init?: RequestInit): Promise<R
   throw new Error('Unable to reach adviser endpoints.');
 }
 
-function normalizeYearLevel(value: unknown): string | null {
+function toYearLevelLabel(value: unknown): string | null {
   const raw = String(value ?? '').trim();
   if (!raw) {
     return null;
   }
 
-  const upper = raw.toUpperCase();
-  if (upper === 'BSCPE-1' || upper === '1ST YEAR' || upper === '1') {
-    return 'BSCPE-1';
-  }
-  if (upper === 'BSCPE-2' || upper === '2ND YEAR' || upper === '2') {
-    return 'BSCPE-2';
-  }
-  if (upper === 'BSCPE-3' || upper === '3RD YEAR' || upper === '3') {
-    return 'BSCPE-3';
-  }
-  if (upper === 'BSCPE-4' || upper === '4TH YEAR' || upper === '4') {
-    return 'BSCPE-4';
+  return raw;
+}
+
+function getYearLevelLabelFromItem(item: any, fallbackId?: string): string {
+  const label =
+    toYearLevelLabel(
+      item?.yearLevelName
+      ?? item?.name
+      ?? item?.yearLevel
+      ?? item?.description
+      ?? item?.label
+      ?? item?.displayName
+      ?? item?.title
+      ?? item?.code,
+    ) ?? '';
+
+  if (label) {
+    return label;
   }
 
-  return raw;
+  if (fallbackId) {
+    return `Year Level ${fallbackId}`;
+  }
+
+  return 'Year Level';
 }
 
 function getAuthToken(): string | null {
@@ -97,9 +115,13 @@ function getErrorMessage(payload: unknown, fallback: string): string {
 
 export function ChairmanDashboard() {
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
+  const [yearLevels, setYearLevels] = useState<YearLevelOption[]>([]);
+  const [yearLevelsError, setYearLevelsError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedYearByAdvisor, setSelectedYearByAdvisor] = useState<Record<string, string>>({});
+  const [savingAdvisorId, setSavingAdvisorId] = useState<string | null>(null);
 
   const loadAdvisors = async () => {
     setIsLoading(true);
@@ -127,7 +149,61 @@ export function ChairmanDashboard() {
 
       const adviserRows = Array.isArray(payload) ? payload : [];
 
-      const assignmentsByAdvisorId = new Map<string, string | null>();
+      const yearLevelById = new Map<string, string>();
+      setYearLevelsError('');
+
+      const normalizeYearLevelRows = (rows: any[]): YearLevelOption[] => {
+        return rows
+          .map((item: any) => {
+            const id = String(item.yearLevelId ?? item.id ?? item.value ?? '').trim();
+              const label = getYearLevelLabelFromItem(item, id);
+
+            if (id) {
+                yearLevelById.set(id, label);
+            }
+
+            return {
+              id,
+                label,
+            };
+          })
+          .filter((row) => row.id);
+      };
+
+      const tryLoadYearLevels = async (path: string): Promise<YearLevelOption[] | null> => {
+        try {
+          const response = await fetchWithApiFallback(path, {
+            headers: {
+              ...headers,
+            },
+          });
+
+          const payload = await response.json().catch(() => ([]));
+          if (!response.ok) {
+            return null;
+          }
+
+          const rows = Array.isArray(payload) ? payload : [];
+          return normalizeYearLevelRows(rows);
+        } catch {
+          return null;
+        }
+      };
+
+      const fromStudentsYearLevels = await tryLoadYearLevels('/Students/year-levels');
+      if (fromStudentsYearLevels && fromStudentsYearLevels.length > 0) {
+        setYearLevels(fromStudentsYearLevels);
+      } else {
+        const fromLegacyYearLevels = await tryLoadYearLevels('/YearLevels');
+        if (fromLegacyYearLevels && fromLegacyYearLevels.length > 0) {
+          setYearLevels(fromLegacyYearLevels);
+        } else {
+          setYearLevels([]);
+          setYearLevelsError('Year levels endpoint is unavailable. Please check backend /api/Students/year-levels (500).');
+        }
+      }
+
+      const assignmentsByAdvisorId = new Map<string, { yearLevel: string | null; yearLevelId?: number | string | null; assignmentId?: number | string | null }>();
       try {
         const assignmentsResponse = await fetchWithApiFallback('/AdviserAssignments', {
           headers: {
@@ -141,11 +217,28 @@ export function ChairmanDashboard() {
 
           assignments.forEach((item: any) => {
             const advisorRef = item.adviserId ?? item.advisorId ?? item.adviser?.id ?? item.advisor?.id;
-            const yearValue = normalizeYearLevel(item.yearLevel ?? item.assignedYearLevel ?? item.year ?? item.level);
+            const yearLevelId = item.yearLevelId ?? item.yearlevelId ?? item.levelId ?? null;
+            const yearFromId = yearLevelId !== null && yearLevelId !== undefined
+              ? yearLevelById.get(String(yearLevelId)) ?? null
+              : null;
+            const yearValue =
+              yearFromId
+              ?? toYearLevelLabel(item.yearLevel ?? item.assignedYearLevel ?? item.year ?? item.level);
+            const assignmentId = item.adviserAssignmentId ?? item.advisorAssignmentId ?? item.id;
+            if (yearLevelId !== null && yearLevelId !== undefined && !yearLevelById.has(String(yearLevelId))) {
+              const fallbackLabel = toYearLevelLabel(item.yearLevel ?? item.assignedYearLevel ?? item.year ?? item.level)
+                ?? `Year Level ${yearLevelId}`;
+              yearLevelById.set(String(yearLevelId), fallbackLabel);
+            }
             if (advisorRef !== undefined && advisorRef !== null) {
-              assignmentsByAdvisorId.set(String(advisorRef), yearValue);
+              assignmentsByAdvisorId.set(String(advisorRef), { yearLevel: yearValue, yearLevelId, assignmentId });
             }
           });
+
+          if (yearLevels.length === 0 && yearLevelById.size > 0) {
+            const inferred = Array.from(yearLevelById.entries()).map(([id, label]) => ({ id, label }));
+            setYearLevels(inferred);
+          }
         }
       } catch {
         // Assignment endpoint failure should not block adviser listing.
@@ -157,11 +250,18 @@ export function ChairmanDashboard() {
         const firstName = String(item.firstName ?? item.user?.firstName ?? '').trim();
         const lastName = String(item.lastName ?? item.user?.lastName ?? '').trim();
         const fullName = `${firstName} ${lastName}`.trim();
-        const directYearLevel = normalizeYearLevel(item.yearLevel ?? item.assignedYearLevel ?? item.year ?? item.level);
-        const assignmentYearLevel = assignmentsByAdvisorId.get(String(rowId))
+        const directYearLevelId = item.yearLevelId ?? item.yearlevelId ?? item.levelId ?? null;
+        const directYearFromId = directYearLevelId !== null && directYearLevelId !== undefined
+          ? yearLevelById.get(String(directYearLevelId)) ?? null
+          : null;
+        const directYearLevel =
+          directYearFromId
+          ?? toYearLevelLabel(item.yearLevel ?? item.assignedYearLevel ?? item.year ?? item.level);
+        const assignmentMeta = assignmentsByAdvisorId.get(String(rowId))
           ?? assignmentsByAdvisorId.get(String(advisorCode))
           ?? null;
-        const yearLevel = directYearLevel ?? assignmentYearLevel;
+        const yearLevel = directYearLevel ?? assignmentMeta?.yearLevel ?? null;
+        const yearLevelId = directYearLevelId ?? assignmentMeta?.yearLevelId ?? null;
 
         return {
           id: rowId,
@@ -169,11 +269,20 @@ export function ChairmanDashboard() {
           email: String(item.email ?? item.user?.email ?? item.username ?? 'No email provided'),
           advisorId: String(advisorCode ?? ''),
           assignedYearLevel: yearLevel,
+          assignedYearLevelId: yearLevelId,
+          assignmentId: assignmentMeta?.assignmentId ?? null,
           status: yearLevel ? 'active' : 'inactive',
         };
       });
 
       setAdvisors(normalizedAdvisors);
+      const nextSelected: Record<string, string> = {};
+      normalizedAdvisors.forEach((advisor) => {
+        if (advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined) {
+          nextSelected[String(advisor.id)] = String(advisor.assignedYearLevelId);
+        }
+      });
+      setSelectedYearByAdvisor(nextSelected);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to fetch advisers from backend.');
       setAdvisors([]);
@@ -185,6 +294,66 @@ export function ChairmanDashboard() {
   useEffect(() => {
     loadAdvisors();
   }, []);
+
+  const assignAdvisorToYearLevel = async (advisor: Advisor) => {
+    const selectedYearLevelId = selectedYearByAdvisor[String(advisor.id)]
+      || (advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined ? String(advisor.assignedYearLevelId) : '');
+    if (!selectedYearLevelId) {
+      setError('Please select a year level before assigning an adviser.');
+      return;
+    }
+
+    const currentAssignedYearLevelId = advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined
+      ? String(advisor.assignedYearLevelId)
+      : '';
+    if (advisor.assignmentId && currentAssignedYearLevelId && currentAssignedYearLevelId === selectedYearLevelId) {
+      setError('This adviser is already assigned to the selected year level.');
+      return;
+    }
+
+    setSavingAdvisorId(String(advisor.id));
+    setError('');
+
+    try {
+      const token = getAuthToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      const normalizedYearLevelId = /^\d+$/.test(selectedYearLevelId)
+        ? Number(selectedYearLevelId)
+        : selectedYearLevelId;
+
+      const payload = {
+        adviserId: advisor.id,
+        yearLevelId: normalizedYearLevelId,
+      };
+
+      const response = advisor.assignmentId
+        ? await fetchWithApiFallback(`/AdviserAssignments/${advisor.assignmentId}/reassign`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(payload),
+          })
+        : await fetchWithApiFallback('/AdviserAssignments', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+          });
+
+      const responsePayload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(getErrorMessage(responsePayload, 'Unable to assign adviser.'));
+      }
+
+      await loadAdvisors();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to assign adviser.');
+    } finally {
+      setSavingAdvisorId(null);
+    }
+  };
 
   const filteredAdvisors = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
@@ -201,13 +370,17 @@ export function ChairmanDashboard() {
     });
   }, [advisors, searchTerm]);
 
-  const yearLevelCounts = {
-    'BSCPE-1': advisors.filter(a => a.assignedYearLevel === 'BSCPE-1').length,
-    'BSCPE-2': advisors.filter(a => a.assignedYearLevel === 'BSCPE-2').length,
-    'BSCPE-3': advisors.filter(a => a.assignedYearLevel === 'BSCPE-3').length,
-    'BSCPE-4': advisors.filter(a => a.assignedYearLevel === 'BSCPE-4').length,
-    'Unassigned': advisors.filter(a => !a.assignedYearLevel).length,
-  };
+  const preferredYearOrder = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+  const availableYearLevels = yearLevels.length > 0
+    ? yearLevels.map((y) => y.label)
+    : preferredYearOrder;
+
+  const yearLevelCounts = availableYearLevels.reduce((acc, yearLabel) => {
+    acc[yearLabel] = advisors.filter((a) => a.assignedYearLevel === yearLabel).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const unassignedCount = advisors.filter((a) => !a.assignedYearLevel).length;
 
   return (
     <div className="space-y-6">
@@ -239,9 +412,9 @@ export function ChairmanDashboard() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-600 mb-1">BSCPE-1</p>
-                <p className="text-2xl font-bold text-green-900">{yearLevelCounts['BSCPE-1']}</p>
-                <p className="text-xs text-gray-500 mt-1">Advisor{yearLevelCounts['BSCPE-1'] !== 1 ? 's' : ''} Assigned</p>
+                <p className="text-sm text-gray-600 mb-1">{availableYearLevels[0] ?? '1st Year'}</p>
+                <p className="text-2xl font-bold text-green-900">{yearLevelCounts[availableYearLevels[0] ?? '1st Year'] ?? 0}</p>
+                <p className="text-xs text-gray-500 mt-1">Advisor{(yearLevelCounts[availableYearLevels[0] ?? '1st Year'] ?? 0) !== 1 ? 's' : ''} Assigned</p>
               </div>
               <div className="h-12 w-12 bg-green-100 rounded-full flex items-center justify-center">
                 <Users className="h-6 w-6 text-green-700" />
@@ -254,9 +427,9 @@ export function ChairmanDashboard() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-600 mb-1">BSCPE-2</p>
-                <p className="text-2xl font-bold text-green-900">{yearLevelCounts['BSCPE-2']}</p>
-                <p className="text-xs text-gray-500 mt-1">Advisor{yearLevelCounts['BSCPE-2'] !== 1 ? 's' : ''} Assigned</p>
+                <p className="text-sm text-gray-600 mb-1">{availableYearLevels[1] ?? '2nd Year'}</p>
+                <p className="text-2xl font-bold text-green-900">{yearLevelCounts[availableYearLevels[1] ?? '2nd Year'] ?? 0}</p>
+                <p className="text-xs text-gray-500 mt-1">Advisor{(yearLevelCounts[availableYearLevels[1] ?? '2nd Year'] ?? 0) !== 1 ? 's' : ''} Assigned</p>
               </div>
               <div className="h-12 w-12 bg-green-100 rounded-full flex items-center justify-center">
                 <Users className="h-6 w-6 text-green-700" />
@@ -269,9 +442,9 @@ export function ChairmanDashboard() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-600 mb-1">BSCPE-3</p>
-                <p className="text-2xl font-bold text-green-900">{yearLevelCounts['BSCPE-3']}</p>
-                <p className="text-xs text-gray-500 mt-1">Advisor{yearLevelCounts['BSCPE-3'] !== 1 ? 's' : ''} Assigned</p>
+                <p className="text-sm text-gray-600 mb-1">{availableYearLevels[2] ?? '3rd Year'}</p>
+                <p className="text-2xl font-bold text-green-900">{yearLevelCounts[availableYearLevels[2] ?? '3rd Year'] ?? 0}</p>
+                <p className="text-xs text-gray-500 mt-1">Advisor{(yearLevelCounts[availableYearLevels[2] ?? '3rd Year'] ?? 0) !== 1 ? 's' : ''} Assigned</p>
               </div>
               <div className="h-12 w-12 bg-green-100 rounded-full flex items-center justify-center">
                 <Users className="h-6 w-6 text-green-700" />
@@ -284,9 +457,9 @@ export function ChairmanDashboard() {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-600 mb-1">BSCPE-4</p>
-                <p className="text-2xl font-bold text-green-900">{yearLevelCounts['BSCPE-4']}</p>
-                <p className="text-xs text-gray-500 mt-1">Advisor{yearLevelCounts['BSCPE-4'] !== 1 ? 's' : ''} Assigned</p>
+                <p className="text-sm text-gray-600 mb-1">{availableYearLevels[3] ?? '4th Year'}</p>
+                <p className="text-2xl font-bold text-green-900">{yearLevelCounts[availableYearLevels[3] ?? '4th Year'] ?? 0}</p>
+                <p className="text-xs text-gray-500 mt-1">Advisor{(yearLevelCounts[availableYearLevels[3] ?? '4th Year'] ?? 0) !== 1 ? 's' : ''} Assigned</p>
               </div>
               <div className="h-12 w-12 bg-green-100 rounded-full flex items-center justify-center">
                 <Users className="h-6 w-6 text-green-700" />
@@ -300,7 +473,7 @@ export function ChairmanDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 mb-1">Unassigned</p>
-                <p className="text-2xl font-bold text-yellow-700">{yearLevelCounts['Unassigned']}</p>
+                <p className="text-2xl font-bold text-yellow-700">{unassignedCount}</p>
                 <p className="text-xs text-gray-500 mt-1">Awaiting Assignment</p>
               </div>
               <div className="h-12 w-12 bg-yellow-100 rounded-full flex items-center justify-center">
@@ -357,6 +530,57 @@ export function ChairmanDashboard() {
                   </div>
 
                   <div className="flex items-center gap-3">
+                    {(() => {
+                      const selectedId = selectedYearByAdvisor[String(advisor.id)]
+                        ?? (advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined ? String(advisor.assignedYearLevelId) : '');
+                      const assignedId = advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined
+                        ? String(advisor.assignedYearLevelId)
+                        : '';
+                      const hasExistingAssignment = Boolean(advisor.assignmentId || assignedId);
+                      const isNoChange = Boolean(hasExistingAssignment && selectedId && assignedId && selectedId === assignedId);
+
+                      return (
+                        <>
+                    <Select
+                      value={selectedYearByAdvisor[String(advisor.id)] ?? (advisor.assignedYearLevelId !== null && advisor.assignedYearLevelId !== undefined ? String(advisor.assignedYearLevelId) : '')}
+                      onValueChange={(value) =>
+                        setSelectedYearByAdvisor((prev) => ({
+                          ...prev,
+                          [String(advisor.id)]: value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="w-[130px] h-8">
+                        <SelectValue placeholder="Year" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {yearLevels.length === 0 ? (
+                          <SelectItem value="__none" disabled>Year levels unavailable</SelectItem>
+                        ) : (
+                          yearLevels.map((yearLevel) => (
+                            <SelectItem key={yearLevel.id} value={yearLevel.id}>{yearLevel.label}</SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+
+                    <Button
+                      size="sm"
+                      className="bg-gradient-to-r from-green-600 to-yellow-500 hover:from-green-700 hover:to-yellow-600 text-white"
+                      onClick={() => assignAdvisorToYearLevel(advisor)}
+                      disabled={savingAdvisorId === String(advisor.id) || yearLevels.length === 0 || !selectedId || isNoChange}
+                    >
+                      {savingAdvisorId === String(advisor.id)
+                        ? 'Saving...'
+                        : hasExistingAssignment
+                          ? 'Reassign'
+                          : 'Assign'}
+                    </Button>
+
+                        </>
+                      );
+                    })()}
+
                     {advisor.assignedYearLevel ? (
                       <Badge className="bg-green-100 text-green-800 border-green-300 px-3 py-1">
                         {advisor.assignedYearLevel}
@@ -378,6 +602,12 @@ export function ChairmanDashboard() {
               <p className="text-gray-600">No advisers found from backend matching your search.</p>
             </div>
           )}
+
+          {yearLevelsError && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {yearLevelsError}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -388,7 +618,7 @@ export function ChairmanDashboard() {
         </CardHeader>
         <CardContent className="pt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {['BSCPE-1', 'BSCPE-2', 'BSCPE-3', 'BSCPE-4'].map((yearLevel) => {
+            {(availableYearLevels.length > 0 ? availableYearLevels : preferredYearOrder).slice(0, 4).map((yearLevel) => {
               const assignedAdvisors = advisors.filter(a => a.assignedYearLevel === yearLevel);
               return (
                 <div key={yearLevel} className="border border-gray-200 rounded-lg p-4">
