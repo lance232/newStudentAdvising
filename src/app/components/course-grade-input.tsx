@@ -28,12 +28,12 @@ interface Student {
 }
 
 const courses: Course[] = [
-  { id: '1', code: 'CS101', name: 'Introduction to Computing', units: 3, semester: '1st Sem 2025-26', enrolledCount: 25, yearLevel: 'BSCPE-1' },
-  { id: '2', code: 'MATH101', name: 'Calculus I', units: 3, semester: '1st Sem 2025-26', enrolledCount: 30, yearLevel: 'BSCPE-1' },
-  { id: '3', code: 'ENG101', name: 'English Communication', units: 3, semester: '1st Sem 2025-26', enrolledCount: 28, yearLevel: 'BSCPE-1' },
-  { id: '4', code: 'CS201', name: 'Data Structures', units: 3, semester: '1st Sem 2025-26', enrolledCount: 22, yearLevel: 'BSCPE-2' },
-  { id: '5', code: 'CS301', name: 'Computer Architecture', units: 3, semester: '1st Sem 2025-26', enrolledCount: 20, yearLevel: 'BSCPE-3' },
-  { id: '6', code: 'CPE301', name: 'Digital Logic Design', units: 3, semester: '1st Sem 2025-26', enrolledCount: 18, yearLevel: 'BSCPE-3' },
+  { id: '1', code: 'CS101', name: 'Introduction to Computing', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 25, yearLevel: 'BSCPE-1' },
+  { id: '2', code: 'MATH101', name: 'Calculus I', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 30, yearLevel: 'BSCPE-1' },
+  { id: '3', code: 'ENG101', name: 'English Communication', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 28, yearLevel: 'BSCPE-1' },
+  { id: '4', code: 'CS201', name: 'Data Structures', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 22, yearLevel: 'BSCPE-2' },
+  { id: '5', code: 'CS301', name: 'Computer Architecture', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 20, yearLevel: 'BSCPE-3' },
+  { id: '6', code: 'CPE301', name: 'Digital Logic Design', units: 3, semester: '1st Semester 2025-2026', enrolledCount: 18, yearLevel: 'BSCPE-3' },
 ];
 
 const enrolledStudentsData: Record<string, Student[]> = {
@@ -84,7 +84,7 @@ const allStudents: Student[] = [
 
 export function CourseGradeInput() {
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
-  const [selectedSemester, setSelectedSemester] = useState('1st Sem 2025-26');
+  const [selectedSemester, setSelectedSemester] = useState('1st Semester 2025-2026');
   const [searchQuery, setSearchQuery] = useState('');
   const [gradeEntries, setGradeEntries] = useState<Record<string, string>>({});
   const [showSuccess, setShowSuccess] = useState(false);
@@ -206,11 +206,11 @@ export function CourseGradeInput() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1st Sem 2025-26">1st Sem 2025-26</SelectItem>
-                  <SelectItem value="2nd Sem 2025-26">2nd Sem 2025-26</SelectItem>
+                  <SelectItem value="1st Semester 2025-2026">1st Semester 2025-2026</SelectItem>
+                  <SelectItem value="2nd Semester 2025-2026">2nd Semester 2025-2026</SelectItem>
                   <SelectItem value="Summer 2026">Summer 2026</SelectItem>
-                  <SelectItem value="1st Sem 2024-25">1st Sem 2024-25</SelectItem>
-                  <SelectItem value="2nd Sem 2024-25">2nd Sem 2024-25</SelectItem>
+                  <SelectItem value="1st Semester 2024-2025">1st Semester 2024-2025</SelectItem>
+                  <SelectItem value="2nd Semester 2024-2025">2nd Semester 2024-2025</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -12,7 +12,10 @@ import { ResetPassword } from './reset-password';
 import { Toaster as SonnerToaster, toast } from 'sonner';
 
 interface LoginProps {
-  onLogin: (role: 'adviser' | 'student' | 'chairman' | 'admin', userData?: { name: string; id: string }) => void;
+  onLogin: (
+    role: 'adviser' | 'student' | 'chairman' | 'admin',
+    userData?: { name: string; id: string; username?: string },
+  ) => void;
 }
 
 type AppRole = 'adviser' | 'student' | 'chairman' | 'admin';
@@ -23,6 +26,8 @@ const AUTH_ROUTE_PATHS: Record<AuthRoute, string> = {
   'forgot-password': '/forgot-password',
   'reset-password': '/reset-password',
 };
+
+const REMEMBERED_USER_KEY = 'remembered_username';
 
 function getAuthRouteFromPath(pathname: string): AuthRoute {
   if (pathname === AUTH_ROUTE_PATHS['forgot-password']) {
@@ -147,6 +152,14 @@ export function Login({ onLogin }: LoginProps) {
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const remembered = localStorage.getItem(REMEMBERED_USER_KEY) ?? '';
+    if (remembered.trim()) {
+      setIdentifier(remembered.trim());
+      setRememberMe(true);
+    }
   }, []);
 
   const navigateToAuthRoute = (route: AuthRoute, replace = false) => {
@@ -302,22 +315,25 @@ export function Login({ onLogin }: LoginProps) {
       const fullName = `${firstName} ${lastName}`.trim();
       const fallbackName = data.user?.username ?? data.username ?? identifier;
       const userName = fullName || fallbackName;
+      const username = String(data.user?.username ?? data.username ?? identifier).trim();
       const userId = String(data.user?.id ?? data.userId ?? data.id ?? identifier);
 
       const token = normalizeStoredToken(data.accessToken ?? data.token ?? data.access_token ?? data.jwt ?? data.Token);
       if (token) {
-        if (rememberMe) {
-          localStorage.setItem('auth_token', token);
-          sessionStorage.removeItem('auth_token');
-        } else {
-          sessionStorage.setItem('auth_token', token);
-          localStorage.removeItem('auth_token');
-        }
+        sessionStorage.setItem('auth_token', token);
+        localStorage.removeItem('auth_token');
+      }
+
+      if (rememberMe) {
+        localStorage.setItem(REMEMBERED_USER_KEY, identifier.trim());
+      } else {
+        localStorage.removeItem(REMEMBERED_USER_KEY);
       }
 
       onLogin(mappedRole, {
         name: userName,
         id: userId,
+        username,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in. Please try again.');
@@ -412,39 +428,75 @@ export function Login({ onLogin }: LoginProps) {
     <div className="min-h-screen bg-[#f1f3f2] px-4 py-8 md:px-8 md:py-12">
       <SonnerToaster richColors position="top-right" />
       <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
-        <section className="hidden lg:block">
-          <div className="mb-12 flex items-center gap-4">
-            <div className="h-16 w-16 overflow-hidden rounded-full border border-[#d7dbd8] bg-white shadow-sm">
+        <section className="relative hidden lg:block">
+          <div className="absolute -left-10 top-12 h-40 w-40 rounded-full bg-gradient-to-br from-[#dff4ea] via-[#f9f2dd] to-transparent blur-3xl" />
+          <div className="absolute right-10 top-48 h-36 w-36 rounded-full bg-gradient-to-br from-[#e8f2ff] via-[#fff1d6] to-transparent blur-3xl" />
+
+          <div className="mb-10 flex items-center gap-4">
+            <div className="h-16 w-16 overflow-hidden rounded-2xl border border-[#d7dbd8] bg-white shadow-sm">
               <img src={usjrLogo} alt="USJR logo" className="h-full w-full object-cover" />
             </div>
             <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#9a7a14]">Academic Advising System</p>
               <h1 className="text-[34px] font-bold leading-tight text-[#0f6a4c]">University of San Jose - Recoletos</h1>
-              <p className="text-sm font-semibold text-[#cc9a00]">Academic Advising System</p>
             </div>
           </div>
 
-          <div className="space-y-3">
-            <h2 className="text-[40px] font-bold leading-tight text-[#223246]">Secure Academic Access</h2>
+          <div className="space-y-4">
+            <h2 className="text-[44px] font-bold leading-tight text-[#1e2b3a]">
+              See the whole advising journey in one system.
+            </h2>
             <p className="max-w-xl text-[15px] leading-relaxed text-[#526172]">
-              Accounts are pre-registered by admin using official IDs and email. Users can sign in directly and recover account access through the forgot password flow.
+              This platform coordinates student appointments, advising notes, and progress signals so advisers, chairmen,
+              and students stay aligned from booking to post-session follow-ups.
             </p>
           </div>
 
-          <div className="mt-10 grid max-w-xl grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-[#d6eadf] bg-white p-4 shadow-sm">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#e9f9ef] text-[#15803d]">
-                <BookOpen className="h-5 w-5" />
-              </div>
-              <p className="font-semibold text-[#223246]">Pre-Registered Accounts</p>
-              <p className="mt-1 text-xs leading-relaxed text-[#5f6f80]">Admin creates users and assigns roles from official records.</p>
-            </div>
+          <div className="mt-8 flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-[0.22em] text-[#56718a]">
+            <span className="rounded-full border border-[#d7e1ea] bg-white px-3 py-1">Appointment lifecycle</span>
+            <span className="rounded-full border border-[#d7e1ea] bg-white px-3 py-1">Adviser notes</span>
+            <span className="rounded-full border border-[#d7e1ea] bg-white px-3 py-1">Progress insights</span>
+          </div>
 
-            <div className="rounded-2xl border border-[#f4deb5] bg-white p-4 shadow-sm">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#fff7e6] text-[#c58a00]">
-                <Radar className="h-5 w-5" />
+          <div className="relative mt-12 max-w-xl">
+            <div className="absolute left-6 top-6 h-full w-full rounded-[28px] border border-[#e8ebe8] bg-white/80 shadow-[0_24px_60px_-50px_rgba(15,23,42,0.6)]" />
+            <div className="absolute left-3 top-3 h-full w-full rounded-[28px] border border-[#dcebe3] bg-gradient-to-br from-white via-[#f6faf8] to-[#fef6e6] shadow-[0_24px_60px_-50px_rgba(15,23,42,0.6)]" />
+
+            <div className="relative space-y-4 rounded-[28px] border border-[#cfe6da] bg-white p-6 shadow-[0_30px_80px_-50px_rgba(15,23,42,0.7)]">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#e9f9ef] text-[#15803d]">
+                  <BookOpen className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[#223246]">Unified advising record</p>
+                  <p className="text-xs leading-relaxed text-[#5f6f80]">Every appointment, decision, and outcome stays connected to a student profile.</p>
+                </div>
               </div>
-              <p className="font-semibold text-[#223246]">Account Recovery</p>
-              <p className="mt-1 text-xs leading-relaxed text-[#5f6f80]">Forgot password helps users reset and regain access securely.</p>
+
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#fff7e6] text-[#c58a00]">
+                  <Radar className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[#223246]">Signals before they slip</p>
+                  <p className="text-xs leading-relaxed text-[#5f6f80]">Track attendance, grades, and warning notes to intervene early.</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#e7f0ff] text-[#1d4ed8]">
+                  <Lock className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[#223246]">Secure role-based access</p>
+                  <p className="text-xs leading-relaxed text-[#5f6f80]">Advisers, chairmen, students, and admins see only what they need.</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 rounded-2xl border border-[#e2ece5] bg-[#f6fbf8] px-4 py-3">
+                <CheckCircle2 className="h-5 w-5 text-[#15803d]" />
+                <p className="text-xs font-semibold text-[#1f2937]">Built to support continuous advising from first year to graduation.</p>
+              </div>
             </div>
           </div>
         </section>

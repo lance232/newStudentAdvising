@@ -3,6 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { AlertCircle, BookOpen, CheckCircle, TrendingUp, User, XCircle } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { ALL_SEMESTERS_VALUE, buildSemesterLabel, matchesSemesterSelection, normalizeSemesterLabel, sortSemesterLabels } from './semester-utils';
 
 interface StudentDashboardProps {
   onBookAppointment: () => void;
@@ -49,6 +52,10 @@ interface DashboardGrade {
   CurrentGrade?: string | number | null;
   units?: number | string | null;
   Units?: number | string | null;
+  semesterName?: string | null;
+  SemesterName?: string | null;
+  schoolYear?: string | null;
+  SchoolYear?: string | null;
 }
 
 interface DashboardPayload {
@@ -56,6 +63,10 @@ interface DashboardPayload {
   StudentId?: number | string | null;
   userId?: number | string | null;
   UserId?: number | string | null;
+  username?: string | null;
+  Username?: string | null;
+  userName?: string | null;
+  UserName?: string | null;
   firstName?: string | null;
   FirstName?: string | null;
   lastName?: string | null;
@@ -74,6 +85,26 @@ interface DashboardPayload {
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
+
+const DASHBOARD_TAB_STORAGE_KEY = 'student_dashboard_tab';
+
+function getTabStorage(): Storage {
+  if (localStorage.getItem('auth_token')) {
+    return localStorage;
+  }
+  if (sessionStorage.getItem('auth_token')) {
+    return sessionStorage;
+  }
+  return localStorage;
+}
+
+function readStoredDashboardTab(): 'current' | 'history' {
+  const value = getTabStorage().getItem(DASHBOARD_TAB_STORAGE_KEY);
+  if (value === 'history') {
+    return 'history';
+  }
+  return 'current';
+}
 
 function getApiBaseCandidates(): string[] {
   const candidates: string[] = [];
@@ -120,6 +151,20 @@ function getAuthToken(): string | null {
   return rawToken.replace(/^Bearer\s+/i, '').trim();
 }
 
+function getSessionUsername(): string {
+  const rawSession = sessionStorage.getItem('app_session');
+  if (!rawSession) {
+    return '';
+  }
+
+  try {
+    const session = JSON.parse(rawSession) as { currentUser?: { username?: string } };
+    return String(session.currentUser?.username ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function getErrorMessage(payload: unknown, fallback: string): string {
   if (!payload || typeof payload !== 'object') {
     return fallback;
@@ -151,10 +196,26 @@ function getGradeNumeric(grade: DashboardGrade): number | null {
   );
 }
 
+function formatGradeDisplay(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return 'Not Set';
+  }
+
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed)) {
+    return parsed.toFixed(1);
+  }
+
+  return raw;
+}
+
 export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
+  const [historySemester, setHistorySemester] = useState(ALL_SEMESTERS_VALUE);
+  const [activeTab, setActiveTab] = useState<'current' | 'history'>(() => readStoredDashboardTab());
 
   const loadDashboard = async () => {
     setIsLoading(true);
@@ -186,6 +247,10 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
     loadDashboard();
   }, []);
 
+  useEffect(() => {
+    getTabStorage().setItem(DASHBOARD_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
+
   const fullName = useMemo(() => {
     const firstName = String(dashboard?.firstName ?? dashboard?.FirstName ?? '').trim();
     const lastName = String(dashboard?.lastName ?? dashboard?.LastName ?? '').trim();
@@ -196,22 +261,135 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
     return 'Student';
   }, [dashboard]);
 
-  const studentIdText = String(dashboard?.studentId ?? dashboard?.StudentId ?? 'Not Set') || 'Not Set';
+  const sessionUsername = getSessionUsername();
+  const studentIdText = String(
+    dashboard?.username
+    ?? dashboard?.Username
+    ?? dashboard?.userName
+    ?? dashboard?.UserName
+    ?? sessionUsername
+    ?? 'Not Set',
+  ) || 'Not Set';
   const yearLevelName = String(dashboard?.yearLevelName ?? dashboard?.YearLevelName ?? 'Not Set') || 'Not Set';
 
   const enrollments = (dashboard?.enrollments ?? dashboard?.Enrollments ?? []) as DashboardEnrollment[];
   const grades = (dashboard?.grades ?? dashboard?.Grades ?? []) as DashboardGrade[];
   const assignedAdvisers = (dashboard?.assignedAdvisers ?? dashboard?.AssignedAdvisers ?? []) as DashboardAdviser[];
 
-  const gwa = useMemo(() => {
-    if (grades.length === 0) {
+  const enrollmentRows = useMemo(() => {
+    return enrollments.map((item) => ({
+      ...item,
+      semesterLabel: buildSemesterLabel(item.semesterName ?? item.SemesterName, item.schoolYear ?? item.SchoolYear),
+    }));
+  }, [enrollments]);
+
+  const gradeRows = useMemo(() => {
+    return grades.map((item) => ({
+      ...item,
+      semesterLabel: buildSemesterLabel(item.semesterName ?? item.SemesterName, item.schoolYear ?? item.SchoolYear),
+    }));
+  }, [grades]);
+
+  const semesterOptions = useMemo(() => {
+    return sortSemesterLabels([
+      ...enrollmentRows.map((item) => item.semesterLabel),
+      ...gradeRows.map((item) => item.semesterLabel),
+    ]);
+  }, [enrollmentRows, gradeRows]);
+
+  const currentSemesterLabel = useMemo(() => {
+    if (semesterOptions.length === 0) {
+      return '';
+    }
+
+    const parsed = semesterOptions.map((label) => {
+      const normalized = normalizeSemesterLabel(label);
+      const yearMatch = normalized.match(/\b(\d{4})\b/);
+      const year = yearMatch ? Number(yearMatch[1]) : 0;
+      const lower = normalized.toLowerCase();
+      let rank = 0;
+      if (lower.startsWith('1st semester')) {
+        rank = 1;
+      } else if (lower.startsWith('2nd semester')) {
+        rank = 2;
+      } else if (lower.startsWith('summer')) {
+        rank = 3;
+      }
+      return { label: normalized, year, rank };
+    });
+
+    parsed.sort((left, right) => {
+      if (left.year !== right.year) {
+        return left.year - right.year;
+      }
+      return left.rank - right.rank;
+    });
+
+    return parsed[parsed.length - 1]?.label ?? '';
+  }, [semesterOptions]);
+
+  useEffect(() => {
+    if (currentSemesterLabel && historySemester === currentSemesterLabel) {
+      setHistorySemester(ALL_SEMESTERS_VALUE);
+    }
+  }, [currentSemesterLabel, historySemester]);
+
+  const historySemesterOptions = useMemo(() => {
+    if (!currentSemesterLabel) {
+      return semesterOptions;
+    }
+
+    const currentIndex = semesterOptions.findIndex(
+      (label) => normalizeSemesterLabel(label) === currentSemesterLabel,
+    );
+
+    if (currentIndex <= 0) {
+      return [];
+    }
+
+    return semesterOptions.slice(0, currentIndex);
+  }, [semesterOptions, currentSemesterLabel]);
+
+  const historyGradeRows = useMemo(() => {
+    if (historySemesterOptions.length === 0) {
+      return [];
+    }
+
+    const allowed = new Set(historySemesterOptions.map((label) => normalizeSemesterLabel(label)));
+    return gradeRows.filter((item) => allowed.has(normalizeSemesterLabel(item.semesterLabel)));
+  }, [gradeRows, historySemesterOptions]);
+
+  const historyGrades = useMemo(() => {
+    if (historySemester === ALL_SEMESTERS_VALUE) {
+      return gradeRows;
+    }
+
+    return historyGradeRows.filter((item) => matchesSemesterSelection(item.semesterLabel, historySemester));
+  }, [gradeRows, historyGradeRows, historySemester]);
+
+  const currentSemesterGrades = useMemo(() => {
+    if (!currentSemesterLabel) {
+      return gradeRows;
+    }
+    return gradeRows.filter((item) => normalizeSemesterLabel(item.semesterLabel) === currentSemesterLabel);
+  }, [gradeRows, currentSemesterLabel]);
+
+  const selectedEnrollments = useMemo(() => {
+    if (!currentSemesterLabel) {
+      return enrollmentRows;
+    }
+    return enrollmentRows.filter((item) => normalizeSemesterLabel(item.semesterLabel) === currentSemesterLabel);
+  }, [enrollmentRows, currentSemesterLabel]);
+
+  const currentGwa = useMemo(() => {
+    if (currentSemesterGrades.length === 0) {
       return 'Not Set';
     }
 
     let totalWeighted = 0;
     let totalUnits = 0;
 
-    grades.forEach((grade) => {
+    currentSemesterGrades.forEach((grade) => {
       const value = getGradeNumeric(grade);
       const units = parseNumber(grade.units ?? grade.Units) ?? 0;
       if (value !== null && units > 0) {
@@ -225,36 +403,68 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
     }
 
     return (totalWeighted / totalUnits).toFixed(2);
-  }, [grades]);
+  }, [currentSemesterGrades]);
 
-  const passCount = useMemo(() => grades.filter((g) => {
+  const historyGwa = useMemo(() => {
+    if (historyGrades.length === 0) {
+      return 'Not Set';
+    }
+
+    let totalWeighted = 0;
+    let totalUnits = 0;
+
+    historyGrades.forEach((grade) => {
+      const value = getGradeNumeric(grade);
+      const units = parseNumber(grade.units ?? grade.Units) ?? 0;
+      if (value !== null && units > 0) {
+        totalWeighted += value * units;
+        totalUnits += units;
+      }
+    });
+
+    if (totalUnits === 0) {
+      return 'Not Set';
+    }
+
+    return (totalWeighted / totalUnits).toFixed(2);
+  }, [historyGrades]);
+
+  const passCount = useMemo(() => currentSemesterGrades.filter((g) => {
     const value = getGradeNumeric(g);
     return value !== null && value >= 1.0 && value <= 3.0;
-  }).length, [grades]);
+  }).length, [currentSemesterGrades]);
 
-  const failCount = useMemo(() => grades.filter((g) => {
+  const failCount = useMemo(() => currentSemesterGrades.filter((g) => {
     const value = getGradeNumeric(g);
     return value !== null && value > 3.0;
-  }).length, [grades]);
+  }).length, [currentSemesterGrades]);
 
-  const totalUnits = useMemo(() => grades.reduce((sum, g) => {
+  const totalUnits = useMemo(() => currentSemesterGrades.reduce((sum, g) => {
     const units = parseNumber(g.units ?? g.Units);
     return units !== null ? sum + units : sum;
-  }, 0), [grades]);
+  }, 0), [currentSemesterGrades]);
+
+  const historyTotalUnits = useMemo(() => historyGrades.reduce((sum, g) => {
+    const units = parseNumber(g.units ?? g.Units);
+    return units !== null ? sum + units : sum;
+  }, 0), [historyGrades]);
+
 
   return (
     <div className="space-y-6">
       <div className="bg-gradient-to-r from-green-50 to-yellow-50 rounded-lg p-6 border border-green-200">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="tracking-tight mb-1">Student Dashboard</h2>
             <p className="text-gray-700">
-              <span className="font-medium">{fullName}</span> • {studentIdText} • {yearLevelName}
+              <span className="font-medium">{fullName}</span> • Username: {studentIdText} • {yearLevelName}
             </p>
           </div>
-          <Button onClick={onBookAppointment} className="bg-gradient-to-r from-green-600 to-yellow-500 hover:from-green-700 hover:to-yellow-600 text-white">
-            Book Appointment
-          </Button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Button onClick={onBookAppointment} className="bg-gradient-to-r from-green-600 to-yellow-500 hover:from-green-700 hover:to-yellow-600 text-white">
+              Book Appointment
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -281,8 +491,8 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
               <CardContent className="pt-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-gray-600 mb-1">Current GWA</p>
-                    <p className="text-2xl font-bold text-green-900">{gwa}</p>
+                    <p className="text-sm text-gray-600 mb-1">GWA</p>
+                    <p className="text-2xl font-bold text-green-900">{currentGwa}</p>
                   </div>
                   <TrendingUp className="h-8 w-8 text-green-600" />
                 </div>
@@ -326,10 +536,17 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
             </Card>
           </div>
 
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span>Summary semester:</span>
+            <Badge className="bg-green-100 text-green-800 border-green-200">
+              {currentSemesterLabel || 'Current Semester'}
+            </Badge>
+          </div>
+
           <Card className="border-green-200 shadow-md">
             <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
               <CardTitle className="text-green-900">Assigned Advisers</CardTitle>
-              <CardDescription>Source: GET /api/Students/me/dashboard</CardDescription>
+              <CardDescription>Your currently assigned academic advisers.</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               {assignedAdvisers.length === 0 ? (
@@ -356,67 +573,154 @@ export function StudentDashboard({ onBookAppointment }: StudentDashboardProps) {
             </CardContent>
           </Card>
 
-          <Card className="border-green-200 shadow-md">
-            <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
-              <CardTitle className="text-green-900">Current Courses / Enrollments</CardTitle>
-              <CardDescription>Source: Enrollments from student dashboard endpoint</CardDescription>
-            </CardHeader>
-            <CardContent className="pt-6">
-              {enrollments.length === 0 ? (
-                <p className="text-sm text-gray-500">No current enrollments found.</p>
-              ) : (
-                <div className="space-y-2">
-                  {enrollments.map((item, index) => {
-                    const courseCode = String(item.courseCode ?? item.CourseCode ?? 'Not Set') || 'Not Set';
-                    const courseName = String(item.courseName ?? item.CourseName ?? 'Not Set') || 'Not Set';
-                    const units = String(item.units ?? item.Units ?? 'Not Set') || 'Not Set';
-                    const semesterName = String(item.semesterName ?? item.SemesterName ?? '').trim();
-                    const schoolYear = String(item.schoolYear ?? item.SchoolYear ?? '').trim();
-                    const semester = `${semesterName} ${schoolYear}`.trim() || 'Not Set';
-                    const currentGrade = String(item.currentGrade ?? item.CurrentGrade ?? 'Not Set') || 'Not Set';
-                    return (
-                      <div key={String(item.enrollmentId ?? item.EnrollmentId ?? index)} className="grid grid-cols-12 gap-3 rounded-md border border-gray-200 p-3 text-sm">
-                        <div className="col-span-2 font-semibold text-green-900">{courseCode}</div>
-                        <div className="col-span-4">{courseName}</div>
-                        <div className="col-span-1">{units}</div>
-                        <div className="col-span-3 text-gray-600">{semester}</div>
-                        <div className="col-span-2 font-medium">{currentGrade}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="current">Current</TabsTrigger>
+              <TabsTrigger value="history">Grade History</TabsTrigger>
+            </TabsList>
 
-          <Card className="border-green-200 shadow-md">
-            <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
-              <CardTitle className="text-green-900">Grades</CardTitle>
-              <CardDescription>Source: Grades from student dashboard endpoint</CardDescription>
-            </CardHeader>
-            <CardContent className="pt-6">
-              {grades.length === 0 ? (
-                <p className="text-sm text-gray-500">No grades found.</p>
-              ) : (
-                <div className="space-y-2">
-                  {grades.map((item, index) => {
-                    const courseCode = String(item.courseCode ?? item.CourseCode ?? 'Not Set') || 'Not Set';
-                    const courseName = String(item.courseName ?? item.CourseName ?? 'Not Set') || 'Not Set';
-                    const gradeValue = String(item.currentGrade ?? item.CurrentGrade ?? item.gradeValue ?? item.GradeValue ?? 'Not Set') || 'Not Set';
-                    const units = String(item.units ?? item.Units ?? 'Not Set') || 'Not Set';
-                    return (
-                      <div key={String(item.gradeId ?? item.GradeId ?? index)} className="grid grid-cols-12 gap-3 rounded-md border border-gray-200 p-3 text-sm">
-                        <div className="col-span-2 font-semibold text-green-900">{courseCode}</div>
-                        <div className="col-span-6">{courseName}</div>
-                        <div className="col-span-2">{units}</div>
-                        <div className="col-span-2 font-medium">{gradeValue}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+            <TabsContent value="current">
+              <Card className="border-green-200 shadow-md">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
+                  <CardTitle className="text-green-900">Courses / Enrollments</CardTitle>
+                  <CardDescription>Selected semester courses and recorded grades.</CardDescription>
+                </CardHeader>
+                <CardContent className="pt-6 space-y-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border border-green-200 bg-green-50/60 p-4">
+                      <p className="text-sm text-gray-600">GWA (Selected Semester)</p>
+                      <p className="text-2xl font-semibold text-green-900">{currentGwa}</p>
+                    </div>
+                    <div className="rounded-lg border border-yellow-200 bg-yellow-50/60 p-4">
+                      <p className="text-sm text-gray-600">Total Units (Selected Semester)</p>
+                      <p className="text-2xl font-semibold text-yellow-700">{totalUnits}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pb-4">
+                    <span className="text-xs text-gray-500">
+                      Showing current semester courses.
+                    </span>
+                  </div>
+                  {selectedEnrollments.length === 0 ? (
+                    <p className="text-sm text-gray-500">No enrollments found for this selection.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {selectedEnrollments.map((item, index) => {
+                        const courseCode = String(item.courseCode ?? item.CourseCode ?? 'Not Set') || 'Not Set';
+                        const courseName = String(item.courseName ?? item.CourseName ?? 'Not Set') || 'Not Set';
+                        const units = String(item.units ?? item.Units ?? 'Not Set') || 'Not Set';
+                        const semester = item.semesterLabel;
+                        const currentGrade = formatGradeDisplay(item.currentGrade ?? item.CurrentGrade);
+                        return (
+                          <div key={String(item.enrollmentId ?? item.EnrollmentId ?? index)} className="grid grid-cols-12 gap-3 rounded-md border border-gray-200 p-3 text-sm">
+                            <div className="col-span-2 font-semibold text-green-900">{courseCode}</div>
+                            <div className="col-span-4">{courseName}</div>
+                            <div className="col-span-1">{units}</div>
+                            <div className="col-span-3 text-gray-600">{semester}</div>
+                            <div className="col-span-2 font-medium">
+                              {(() => {
+                                const numeric = parseNumber(item.currentGrade ?? item.CurrentGrade);
+                                const isPassed = numeric !== null && numeric >= 1.0 && numeric <= 3.0;
+                                const isFailed = numeric !== null && numeric > 3.0;
+                                const gradeTone = isPassed
+                                  ? 'text-green-700 bg-green-50 border-green-200'
+                                  : isFailed
+                                    ? 'text-red-700 bg-red-50 border-red-200'
+                                    : 'text-gray-700 bg-gray-50 border-gray-200';
+
+                                return (
+                                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${gradeTone}`}>
+                                    {currentGrade}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="history" className="space-y-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-gray-600">Filter grade history by semester.</p>
+                <Select value={historySemester} onValueChange={setHistorySemester}>
+                  <SelectTrigger className="w-full sm:w-72">
+                    <SelectValue placeholder="Filter by semester" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_SEMESTERS_VALUE}>All Semesters</SelectItem>
+                    {historySemesterOptions.map((semester) => (
+                      <SelectItem key={semester} value={semester}>
+                        {semester}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Card className="border-green-200 shadow-md">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
+                  <CardTitle className="text-green-900">Grades</CardTitle>
+                  <CardDescription>Grade history for completed and ongoing subjects.</CardDescription>
+                </CardHeader>
+                <CardContent className="pt-6 space-y-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border border-green-200 bg-green-50/60 p-4">
+                      <p className="text-sm text-gray-600">GWA (Selected Semester)</p>
+                      <p className="text-2xl font-semibold text-green-900">{historyGwa}</p>
+                    </div>
+                    <div className="rounded-lg border border-yellow-200 bg-yellow-50/60 p-4">
+                      <p className="text-sm text-gray-600">Total Units (Selected Semester)</p>
+                      <p className="text-2xl font-semibold text-yellow-700">{historyTotalUnits}</p>
+                    </div>
+                  </div>
+                  {historyGrades.length === 0 ? (
+                    <p className="text-sm text-gray-500">No grades found.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {historyGrades.map((item, index) => {
+                        const courseCode = String(item.courseCode ?? item.CourseCode ?? 'Not Set') || 'Not Set';
+                        const courseName = String(item.courseName ?? item.CourseName ?? 'Not Set') || 'Not Set';
+                        const gradeValue = formatGradeDisplay(item.currentGrade ?? item.CurrentGrade ?? item.gradeValue ?? item.GradeValue);
+                        const units = String(item.units ?? item.Units ?? 'Not Set') || 'Not Set';
+                        const semester = item.semesterLabel;
+                        return (
+                          <div key={String(item.gradeId ?? item.GradeId ?? index)} className="grid grid-cols-12 gap-3 rounded-md border border-gray-200 p-3 text-sm">
+                            <div className="col-span-2 font-semibold text-green-900">{courseCode}</div>
+                            <div className="col-span-4">{courseName}</div>
+                            <div className="col-span-3 text-gray-600">{semester}</div>
+                            <div className="col-span-1">{units}</div>
+                            <div className="col-span-2 font-medium">
+                              {(() => {
+                                const numeric = getGradeNumeric(item);
+                                const isPassed = numeric !== null && numeric >= 1.0 && numeric <= 3.0;
+                                const isFailed = numeric !== null && numeric > 3.0;
+                                const gradeTone = isPassed
+                                  ? 'text-green-700 bg-green-50 border-green-200'
+                                  : isFailed
+                                    ? 'text-red-700 bg-red-50 border-red-200'
+                                    : 'text-gray-700 bg-gray-50 border-gray-200';
+
+                                return (
+                                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${gradeTone}`}>
+                                    {gradeValue}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </>
       ) : (
         <Card>

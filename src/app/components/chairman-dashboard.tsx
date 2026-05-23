@@ -246,7 +246,7 @@ export function ChairmanDashboard() {
 
       const normalizedAdvisors: Advisor[] = adviserRows.map((item: any) => {
         const rowId = item.id ?? item.adviserId ?? item.advisorId ?? item.userId ?? item.username;
-        const advisorCode = item.adviserId ?? item.advisorId ?? item.user?.username ?? item.username ?? rowId;
+        const advisorCode = item.user?.username ?? item.username ?? item.userName ?? item.adviserId ?? item.advisorId ?? rowId;
         const firstName = String(item.firstName ?? item.user?.firstName ?? '').trim();
         const lastName = String(item.lastName ?? item.user?.lastName ?? '').trim();
         const fullName = `${firstName} ${lastName}`.trim();
@@ -387,7 +387,7 @@ export function ChairmanDashboard() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="tracking-tight">Advisor Management</h2>
-          <p className="text-gray-600">Advisers shown below are loaded from backend endpoints (/api/Advisers and /api/AdviserAssignments).</p>
+          <p className="text-gray-600">Manage adviser assignments by username and year level.</p>
         </div>
         <Button
           onClick={loadAdvisors}
@@ -489,7 +489,7 @@ export function ChairmanDashboard() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-green-900">Faculty Advisors</CardTitle>
-              <CardDescription>Live adviser records from backend (Chairman-safe endpoints)</CardDescription>
+              <CardDescription>View and assign faculty advisers to year levels.</CardDescription>
             </div>
             <Badge className="bg-green-100 text-green-800 border-green-300">
               {advisors.filter(a => a.status === 'active').length} Active
@@ -525,7 +525,7 @@ export function ChairmanDashboard() {
                     <div className="flex-1">
                       <h4 className="font-semibold text-gray-900">{advisor.name}</h4>
                       <p className="text-sm text-gray-600">{advisor.email}</p>
-                      <p className="text-xs text-gray-500">ID: {advisor.advisorId}</p>
+                      <p className="text-xs text-gray-500">Username (ID): {advisor.advisorId}</p>
                     </div>
                   </div>
 
@@ -599,7 +599,7 @@ export function ChairmanDashboard() {
           {!isLoading && filteredAdvisors.length === 0 && (
             <div className="text-center py-12">
               <Users className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600">No advisers found from backend matching your search.</p>
+              <p className="text-gray-600">No advisers found matching your search.</p>
             </div>
           )}
 

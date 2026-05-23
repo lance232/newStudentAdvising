@@ -29,7 +29,7 @@ export function GradeInput({ studentName, studentId, yearLevel }: GradeInputProp
       subjectCode: 'CS101',
       units: 3,
       grade: '1.5',
-      semester: '1st Sem 2025-26',
+      semester: '1st Semester 2025-2026',
       remarks: 'Passed'
     },
     {
@@ -37,7 +37,7 @@ export function GradeInput({ studentName, studentId, yearLevel }: GradeInputProp
       subjectCode: 'MATH101',
       units: 3,
       grade: '2.0',
-      semester: '1st Sem 2025-26',
+      semester: '1st Semester 2025-2026',
       remarks: 'Passed'
     },
     {
@@ -45,12 +45,12 @@ export function GradeInput({ studentName, studentId, yearLevel }: GradeInputProp
       subjectCode: 'ENG101',
       units: 3,
       grade: '4.0',
-      semester: '1st Sem 2025-26',
+      semester: '1st Semester 2025-2026',
       remarks: 'Failed'
     }
   ]);
 
-  const [selectedSemester, setSelectedSemester] = useState('1st Sem 2025-26');
+  const [selectedSemester, setSelectedSemester] = useState('1st Semester 2025-2026');
   const [isAddingGrade, setIsAddingGrade] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -145,11 +145,11 @@ export function GradeInput({ studentName, studentId, yearLevel }: GradeInputProp
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1st Sem 2025-26">1st Sem 2025-26</SelectItem>
-                  <SelectItem value="2nd Sem 2025-26">2nd Sem 2025-26</SelectItem>
+                  <SelectItem value="1st Semester 2025-2026">1st Semester 2025-2026</SelectItem>
+                  <SelectItem value="2nd Semester 2025-2026">2nd Semester 2025-2026</SelectItem>
                   <SelectItem value="Summer 2026">Summer 2026</SelectItem>
-                  <SelectItem value="1st Sem 2024-25">1st Sem 2024-25</SelectItem>
-                  <SelectItem value="2nd Sem 2024-25">2nd Sem 2024-25</SelectItem>
+                  <SelectItem value="1st Semester 2024-2025">1st Semester 2024-2025</SelectItem>
+                  <SelectItem value="2nd Semester 2024-2025">2nd Semester 2024-2025</SelectItem>
                 </SelectContent>
               </Select>
               <Button

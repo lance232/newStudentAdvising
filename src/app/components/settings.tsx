@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, Save } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Copy, Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Toaster } from './ui/sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -10,15 +10,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 
 type DayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday';
 
-type DaySchedule = {
-  enabled: boolean;
+type DayAvailabilitySlot = {
   startTime: string;
   endTime: string;
-  location: string;
   availabilityId: string;
 };
 
+type DaySchedule = {
+  enabled: boolean;
+  slots: DayAvailabilitySlot[];
+};
+
 type AvailabilityState = Record<DayKey, DaySchedule>;
+
+type AvailabilitySlotOption = {
+  value: string;
+  label: string;
+};
 
 interface AdviserAvailabilityRow {
   availabilityId?: number | string | null;
@@ -26,13 +34,29 @@ interface AdviserAvailabilityRow {
   dayOfWeek?: string | null;
   startTime?: string | null;
   endTime?: string | null;
-  location?: string | null;
+}
+
+interface UserDirectoryRow {
+  userId?: number | string | null;
+  UserId?: number | string | null;
+  id?: number | string | null;
+  username?: string | null;
+  Username?: string | null;
+  userName?: string | null;
+  UserName?: string | null;
+  firstName?: string | null;
+  FirstName?: string | null;
+  lastName?: string | null;
+  LastName?: string | null;
+  email?: string | null;
+  Email?: string | null;
 }
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
 
 const PROFILE_STORAGE_KEY = 'adviser_profile_preferences';
+const SESSION_STORAGE_KEY = 'app_session';
 
 const DAY_LABEL_BY_KEY: Record<DayKey, string> = {
   monday: 'Monday',
@@ -44,22 +68,46 @@ const DAY_LABEL_BY_KEY: Record<DayKey, string> = {
 };
 
 const DAY_KEYS: DayKey[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const AVAILABILITY_START_MINUTES = 7 * 60;
+const AVAILABILITY_END_MINUTES = 21 * 60;
+const AVAILABILITY_INTERVAL_MINUTES = 30;
 
-const DEFAULT_DAY_SCHEDULE: DaySchedule = {
-  enabled: false,
-  startTime: '09:00',
-  endTime: '17:00',
-  location: '',
-  availabilityId: '',
-};
+function createDefaultSlot(overrides?: Partial<DayAvailabilitySlot>): DayAvailabilitySlot {
+  return {
+    startTime: '07:00',
+    endTime: '07:30',
+    availabilityId: '',
+    ...overrides,
+  };
+}
 
-const DEFAULT_AVAILABILITY: AvailabilityState = {
-  monday: { ...DEFAULT_DAY_SCHEDULE },
-  tuesday: { ...DEFAULT_DAY_SCHEDULE },
-  wednesday: { ...DEFAULT_DAY_SCHEDULE },
-  thursday: { ...DEFAULT_DAY_SCHEDULE },
-  friday: { ...DEFAULT_DAY_SCHEDULE },
-  saturday: { ...DEFAULT_DAY_SCHEDULE, endTime: '12:00' },
+function createDefaultDaySchedule(defaultSlot?: Partial<DayAvailabilitySlot>): DaySchedule {
+  return {
+    enabled: false,
+    slots: [createDefaultSlot(defaultSlot)],
+  };
+}
+
+function createDefaultAvailabilityState(): AvailabilityState {
+  return {
+    monday: createDefaultDaySchedule(),
+    tuesday: createDefaultDaySchedule(),
+    wednesday: createDefaultDaySchedule(),
+    thursday: createDefaultDaySchedule(),
+    friday: createDefaultDaySchedule(),
+    saturday: createDefaultDaySchedule(),
+  };
+}
+
+const DEFAULT_AVAILABILITY: AvailabilityState = createDefaultAvailabilityState();
+
+const EMPTY_AVAILABILITY: AvailabilityState = {
+  monday: { enabled: false, slots: [] },
+  tuesday: { enabled: false, slots: [] },
+  wednesday: { enabled: false, slots: [] },
+  thursday: { enabled: false, slots: [] },
+  friday: { enabled: false, slots: [] },
+  saturday: { enabled: false, slots: [] },
 };
 
 function getApiBaseCandidates(): string[] {
@@ -105,6 +153,39 @@ function getAuthToken(): string | null {
   }
 
   return rawToken.replace(/^Bearer\s+/i, '').trim();
+}
+
+function getCurrentUserId(): string {
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY) || localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!rawSession) {
+    return '';
+  }
+
+  try {
+    const payload = JSON.parse(rawSession) as { currentUser?: { id?: string | number } };
+    return String(payload.currentUser?.id ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function getCurrentUserName(): string {
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY) || localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!rawSession) {
+    return '';
+  }
+
+  try {
+    const payload = JSON.parse(rawSession) as { currentUser?: { name?: string } };
+    return String(payload.currentUser?.name ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function getProfileStorageKey(): string {
+  const userId = getCurrentUserId();
+  return userId ? `${PROFILE_STORAGE_KEY}:${userId}` : PROFILE_STORAGE_KEY;
 }
 
 function redirectToLogin(): void {
@@ -201,12 +282,111 @@ function parseTimeToMinutes(time: string): number {
   return hour * 60 + minute;
 }
 
+function minutesToTime(totalMinutes: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 30, totalMinutes));
+  const hours = Math.floor(clamped / 60);
+  const minutes = clamped % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function formatTimeLabel(totalMinutes: number): string {
+  const date = new Date(`2000-01-01T${minutesToTime(totalMinutes)}:00`);
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+function getSlotKey(startTime: string, endTime: string): string {
+  return `${normalizeTime(startTime, '07:00')}|${normalizeTime(endTime, '07:30')}`;
+}
+
+function getSlotLabel(startTime: string, endTime: string): string {
+  const startLabel = formatTimeLabel(parseTimeToMinutes(normalizeTime(startTime, '07:00')));
+  const endLabel = formatTimeLabel(parseTimeToMinutes(normalizeTime(endTime, '07:30')));
+  return `${startLabel} - ${endLabel}`;
+}
+
+function parseSlotKey(value: string): { startTime: string; endTime: string } {
+  const [startTime = '', endTime = ''] = String(value ?? '').split('|');
+  return {
+    startTime: normalizeTime(startTime, '07:00'),
+    endTime: normalizeTime(endTime, '07:30'),
+  };
+}
+
+function createAvailabilitySlotOptions(): AvailabilitySlotOption[] {
+  const options: AvailabilitySlotOption[] = [];
+  for (let startMinutes = AVAILABILITY_START_MINUTES; startMinutes + AVAILABILITY_INTERVAL_MINUTES <= AVAILABILITY_END_MINUTES; startMinutes += AVAILABILITY_INTERVAL_MINUTES) {
+    const endMinutes = startMinutes + AVAILABILITY_INTERVAL_MINUTES;
+    const startTime = minutesToTime(startMinutes);
+    const endTime = minutesToTime(endMinutes);
+    options.push({
+      value: getSlotKey(startTime, endTime),
+      label: `${formatTimeLabel(startMinutes)} - ${formatTimeLabel(endMinutes)}`,
+    });
+  }
+  return options;
+}
+
+function createSlotFromOption(option: AvailabilitySlotOption, overrides?: Partial<DayAvailabilitySlot>): DayAvailabilitySlot {
+  const { startTime, endTime } = parseSlotKey(option.value);
+  return createDefaultSlot({
+    startTime,
+    endTime,
+    ...overrides,
+  });
+}
+
+function getSlotValue(slot: DayAvailabilitySlot): string {
+  return getSlotKey(slot.startTime, slot.endTime);
+}
+
+function getNextAvailableSlot(existingSlots: DayAvailabilitySlot[]): DayAvailabilitySlot {
+  const used = new Set(existingSlots.map((slot) => getSlotValue(slot)));
+  const nextOption = createAvailabilitySlotOptions().find((option) => !used.has(option.value));
+  if (!nextOption) {
+    return createDefaultSlot();
+  }
+
+  return createSlotFromOption(nextOption);
+}
+
+function normalizeEditedSlot(slot: DayAvailabilitySlot, field: keyof DayAvailabilitySlot): DayAvailabilitySlot {
+  const startMinutes = parseTimeToMinutes(slot.startTime);
+  const endMinutes = parseTimeToMinutes(slot.endTime);
+
+  if (startMinutes < 0 || endMinutes < 0) {
+    return slot;
+  }
+
+  if (endMinutes > startMinutes) {
+    return slot;
+  }
+
+  if (field === 'startTime') {
+    return {
+      ...slot,
+      endTime: minutesToTime(startMinutes + 30),
+    };
+  }
+
+  if (field === 'endTime') {
+    return {
+      ...slot,
+      startTime: minutesToTime(endMinutes - 30),
+    };
+  }
+
+  return slot;
+}
+
 function validateAvailabilities(
   rows: Array<{
     dayOfWeek?: string;
     startTime?: string;
     endTime?: string;
-    location?: string | null;
   } | null | undefined>,
 ): string | null {
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -214,6 +394,7 @@ function validateAvailabilities(
   }
 
   const allowedDays = new Set(['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']);
+  const rangesByDay = new Map<string, Array<{ start: number; end: number }>>();
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
@@ -247,9 +428,30 @@ function validateAvailabilities(
       return `Availabilities[${index}]: Invalid time format.`;
     }
 
+    if (startMinutes < AVAILABILITY_START_MINUTES || endMinutes > AVAILABILITY_END_MINUTES) {
+      return `Availabilities[${index}]: Time must stay between 7:00 AM and 9:00 PM.`;
+    }
+
+    if (startMinutes % AVAILABILITY_INTERVAL_MINUTES !== 0 || endMinutes % AVAILABILITY_INTERVAL_MINUTES !== 0) {
+      return `Availabilities[${index}]: Time must use 30-minute intervals.`;
+    }
+
+    if (endMinutes - startMinutes !== AVAILABILITY_INTERVAL_MINUTES) {
+      return `Availabilities[${index}]: Each availability slot must be exactly 30 minutes.`;
+    }
+
     if (endMinutes <= startMinutes) {
       return `Availabilities[${index}]: EndTime must be greater than StartTime.`;
     }
+
+    const ranges = rangesByDay.get(dayOfWeek) ?? [];
+    const overlaps = ranges.some((range) => startMinutes < range.end && endMinutes > range.start);
+    if (overlaps) {
+      return `Availabilities[${index}]: Overlapping time ranges are not allowed in the same day.`;
+    }
+
+    ranges.push({ start: startMinutes, end: endMinutes });
+    rangesByDay.set(dayOfWeek, ranges);
   }
 
   return null;
@@ -267,7 +469,7 @@ export function Settings() {
   const [statusSuccess, setStatusSuccess] = useState('');
 
   const loadProfileFromStorage = () => {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    const raw = localStorage.getItem(getProfileStorageKey());
     if (!raw) {
       return;
     }
@@ -281,11 +483,68 @@ export function Settings() {
       };
 
       setAdvisorName(String(payload.advisorName ?? '').trim());
-      setEmail(String(payload.email ?? '').trim());
       setPhone(String(payload.phone ?? '').trim());
       setDepartment(String(payload.department ?? 'Computer Engineering') || 'Computer Engineering');
     } catch {
       // Ignore corrupted local profile data.
+    }
+  };
+
+  const loadUserEmail = async () => {
+    const token = getAuthToken();
+    if (!token) {
+      redirectToLogin();
+      return;
+    }
+
+    try {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+      };
+
+      const response = await fetchWithApiFallback('/users', { headers });
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+
+      const payload = await response.json().catch(() => ([]));
+      if (!response.ok) {
+        return;
+      }
+
+      const rows = Array.isArray(payload) ? (payload as UserDirectoryRow[]) : [];
+      const currentUserId = getCurrentUserId();
+      const currentUserName = getCurrentUserName();
+      if (!currentUserId && !currentUserName) {
+        return;
+      }
+
+      const normalizedCurrentName = currentUserName.trim().toLowerCase();
+
+      const match = rows.find((row) => {
+        const rowId = String(row.userId ?? row.UserId ?? row.id ?? '').trim();
+        if (rowId && currentUserId && rowId === currentUserId) {
+          return true;
+        }
+
+        const rowUsername = String(row.username ?? row.Username ?? row.userName ?? row.UserName ?? '').trim();
+        if (rowUsername && normalizedCurrentName && rowUsername === normalizedCurrentName) {
+          return true;
+        }
+
+        const firstName = String(row.firstName ?? row.FirstName ?? '').trim();
+        const lastName = String(row.lastName ?? row.LastName ?? '').trim();
+        const rowFullName = `${firstName} ${lastName}`.trim().toLowerCase();
+        return rowFullName && normalizedCurrentName && rowFullName === normalizedCurrentName;
+      });
+
+      const normalizedEmail = String(match?.email ?? match?.Email ?? '').trim();
+      if (normalizedEmail) {
+        setEmail(normalizedEmail);
+      }
+    } catch {
+      // Ignore email load failures to avoid blocking settings.
     }
   };
 
@@ -318,17 +577,17 @@ export function Settings() {
 
       const rows = getArrayPayload<AdviserAvailabilityRow>(payload);
       if (rows.length === 0) {
-        setAvailability(DEFAULT_AVAILABILITY);
+        setAvailability(createDefaultAvailabilityState());
         return;
       }
 
       const nextAvailability: AvailabilityState = {
-        monday: { ...DEFAULT_AVAILABILITY.monday },
-        tuesday: { ...DEFAULT_AVAILABILITY.tuesday },
-        wednesday: { ...DEFAULT_AVAILABILITY.wednesday },
-        thursday: { ...DEFAULT_AVAILABILITY.thursday },
-        friday: { ...DEFAULT_AVAILABILITY.friday },
-        saturday: { ...DEFAULT_AVAILABILITY.saturday },
+        monday: { ...EMPTY_AVAILABILITY.monday, slots: [] },
+        tuesday: { ...EMPTY_AVAILABILITY.tuesday, slots: [] },
+        wednesday: { ...EMPTY_AVAILABILITY.wednesday, slots: [] },
+        thursday: { ...EMPTY_AVAILABILITY.thursday, slots: [] },
+        friday: { ...EMPTY_AVAILABILITY.friday, slots: [] },
+        saturday: { ...EMPTY_AVAILABILITY.saturday, slots: [] },
       };
 
       rows.forEach((row) => {
@@ -337,13 +596,18 @@ export function Settings() {
           return;
         }
 
-        nextAvailability[dayKey] = {
-          enabled: true,
-          startTime: normalizeTime(row.startTime, nextAvailability[dayKey].startTime),
-          endTime: normalizeTime(row.endTime, nextAvailability[dayKey].endTime),
-          location: String(row.location ?? '').trim(),
+        nextAvailability[dayKey].enabled = true;
+        nextAvailability[dayKey].slots.push({
+          startTime: normalizeTime(row.startTime, '07:00'),
+          endTime: normalizeTime(row.endTime, '07:30'),
           availabilityId: String(row.availabilityId ?? '').trim(),
-        };
+        });
+      });
+
+      DAY_KEYS.forEach((dayKey) => {
+        if (nextAvailability[dayKey].slots.length === 0) {
+          nextAvailability[dayKey].slots = [createDefaultSlot()];
+        }
       });
 
       setAvailability(nextAvailability);
@@ -358,40 +622,116 @@ export function Settings() {
 
   useEffect(() => {
     loadProfileFromStorage();
+    loadUserEmail();
     loadAvailability();
   }, []);
 
-  const updateDayAvailability = (day: DayKey, field: keyof DaySchedule, value: string | boolean) => {
+  const updateDayEnabled = (day: DayKey, enabled: boolean) => {
+    setAvailability((prev) => {
+      const next = { ...prev };
+      const current = next[day];
+      next[day] = {
+        ...current,
+        enabled,
+        slots: current.slots.length > 0
+          ? current.slots
+          : [createDefaultSlot()],
+      };
+      return next;
+    });
+  };
+
+  const updateDaySlotRange = (day: DayKey, index: number, value: string) => {
+    const { startTime, endTime } = parseSlotKey(value);
     setAvailability((prev) => ({
       ...prev,
       [day]: {
         ...prev[day],
-        [field]: value,
+        slots: prev[day].slots.map((slot, slotIndex) => (
+          slotIndex === index
+            ? {
+                ...slot,
+                startTime,
+                endTime,
+              }
+            : slot
+        )),
       },
     }));
   };
 
-  const timeOptions = useMemo(() => {
-    const times: Array<{ value: string; label: string }> = [];
-    for (let hour = 7; hour <= 20; hour += 1) {
-      for (let minute = 0; minute < 60; minute += 30) {
-        const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-        const date = new Date(`2000-01-01T${value}:00`);
-        const label = date.toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        });
-        times.push({ value, label });
-      }
-    }
-    return times;
-  }, []);
+  const updateDaySlot = (day: DayKey, index: number, field: keyof DayAvailabilitySlot, value: string) => {
+    setAvailability((prev) => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        slots: prev[day].slots.map((slot, slotIndex) => (
+          slotIndex === index
+            ? normalizeEditedSlot({
+                ...slot,
+                [field]: value,
+              }, field)
+            : slot
+        )),
+      },
+    }));
+  };
+
+  const addDaySlot = (day: DayKey) => {
+    setAvailability((prev) => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        enabled: true,
+        slots: [...prev[day].slots, getNextAvailableSlot(prev[day].slots)],
+      },
+    }));
+  };
+
+  const removeDaySlot = (day: DayKey, index: number) => {
+    setAvailability((prev) => {
+      const remaining = prev[day].slots.filter((_, slotIndex) => slotIndex !== index);
+      return {
+        ...prev,
+        [day]: {
+          ...prev[day],
+          slots: remaining.length > 0
+            ? remaining
+            : [createDefaultSlot()],
+        },
+      };
+    });
+  };
+
+  const copyDayToWholeWeek = (sourceDay: DayKey) => {
+    setAvailability((prev) => {
+      const sourceSlots = prev[sourceDay].slots.map((slot) => ({
+        ...slot,
+        availabilityId: '',
+      }));
+
+      const next: AvailabilityState = {
+        monday: { ...prev.monday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+        tuesday: { ...prev.tuesday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+        wednesday: { ...prev.wednesday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+        thursday: { ...prev.thursday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+        friday: { ...prev.friday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+        saturday: { ...prev.saturday, enabled: prev[sourceDay].enabled, slots: sourceSlots.map((slot) => ({ ...slot })) },
+      };
+
+      return next;
+    });
+
+    toast.success(`Copied ${DAY_LABEL_BY_KEY[sourceDay]} schedule to the whole week.`);
+  };
+
+  const timeOptions = useMemo(() => createAvailabilitySlotOptions(), []);
 
   const handleCancel = () => {
     setStatusError('');
     setStatusSuccess('');
     loadProfileFromStorage();
+    loadUserEmail();
     loadAvailability();
   };
 
@@ -402,10 +742,9 @@ export function Settings() {
 
     try {
       localStorage.setItem(
-        PROFILE_STORAGE_KEY,
+        getProfileStorageKey(),
         JSON.stringify({
           advisorName,
-          email,
           phone,
           department,
         }),
@@ -413,12 +752,11 @@ export function Settings() {
 
       const availabilities = DAY_KEYS
         .filter((dayKey) => availability[dayKey].enabled)
-        .map((dayKey) => ({
+        .flatMap((dayKey) => availability[dayKey].slots.map((slot) => ({
           dayOfWeek: toApiDayValue(dayKey),
-          startTime: `${availability[dayKey].startTime}:00`,
-          endTime: `${availability[dayKey].endTime}:00`,
-          location: availability[dayKey].location.trim() || null,
-        }));
+          startTime: `${slot.startTime}:00`,
+          endTime: `${slot.endTime}:00`,
+        })));
 
       const token = getAuthToken();
       if (!token) {
@@ -516,9 +854,10 @@ export function Settings() {
                 id="email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
                 className="border-gray-300"
                 placeholder="Enter email address"
+                readOnly
+                disabled
               />
             </div>
           </div>
@@ -551,7 +890,7 @@ export function Settings() {
 
           <div className="space-y-3 border border-gray-200 rounded-lg p-4 bg-gray-50">
             <Label>Weekly Availability Schedule</Label>
-            <p className="text-xs text-gray-500">Availability is loaded from and saved to /api/advisers/me/availabilities.</p>
+            <p className="text-xs text-gray-500">Set multiple time ranges per day, and copy a day schedule to the whole week.</p>
 
             {isLoading ? (
               <p className="text-sm text-gray-500">Loading adviser availability...</p>
@@ -562,13 +901,13 @@ export function Settings() {
                   return (
                     <div key={day} className="bg-white border border-gray-200 rounded-lg p-4">
                       <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2 w-36">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               id={`${day}-enabled`}
                               checked={schedule.enabled}
-                              onChange={(e) => updateDayAvailability(day, 'enabled', e.target.checked)}
+                              onChange={(e) => updateDayEnabled(day, e.target.checked)}
                               className="h-4 w-4 text-green-600 rounded border-gray-300 focus:ring-green-500"
                             />
                             <Label htmlFor={`${day}-enabled`} className="capitalize cursor-pointer">
@@ -577,58 +916,64 @@ export function Settings() {
                           </div>
 
                           {schedule.enabled && (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1">
-                              <div>
-                                <Label htmlFor={`${day}-start`} className="text-xs text-gray-600">Start Time</Label>
-                                <Select
-                                  value={schedule.startTime}
-                                  onValueChange={(value) => updateDayAvailability(day, 'startTime', value)}
-                                >
-                                  <SelectTrigger id={`${day}-start`} className="mt-1">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {timeOptions.map((time) => (
-                                      <SelectItem key={`${day}-start-${time.value}`} value={time.value}>
-                                        {time.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-
-                              <div>
-                                <Label htmlFor={`${day}-end`} className="text-xs text-gray-600">End Time</Label>
-                                <Select
-                                  value={schedule.endTime}
-                                  onValueChange={(value) => updateDayAvailability(day, 'endTime', value)}
-                                >
-                                  <SelectTrigger id={`${day}-end`} className="mt-1">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {timeOptions.map((time) => (
-                                      <SelectItem key={`${day}-end-${time.value}`} value={time.value}>
-                                        {time.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-
-                              <div>
-                                <Label htmlFor={`${day}-location`} className="text-xs text-gray-600">Location (Optional)</Label>
-                                <Input
-                                  id={`${day}-location`}
-                                  value={schedule.location}
-                                  onChange={(e) => updateDayAvailability(day, 'location', e.target.value)}
-                                  className="mt-1 border-gray-300"
-                                  placeholder="Office / Room"
-                                />
-                              </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button type="button" size="sm" variant="outline" onClick={() => addDaySlot(day)}>
+                                <Plus className="h-4 w-4 mr-1" />
+                                Add Time Slot
+                              </Button>
+                              <Button type="button" size="sm" variant="outline" onClick={() => copyDayToWholeWeek(day)}>
+                                <Copy className="h-4 w-4 mr-1" />
+                                Populate Whole Week
+                              </Button>
                             </div>
                           )}
                         </div>
+
+                        {schedule.enabled && (
+                          <div className="space-y-3">
+                            {schedule.slots.map((slot, slotIndex) => (
+                              <div key={`${day}-slot-${slotIndex}`} className="grid grid-cols-1 md:grid-cols-7 gap-3 items-end rounded-md border border-gray-100 p-3">
+                                <div className="md:col-span-4">
+                                  <Label className="text-xs text-gray-600">Time Slot</Label>
+                                  <Select
+                                    value={getSlotValue(slot)}
+                                    onValueChange={(value) => updateDaySlotRange(day, slotIndex, value)}
+                                  >
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select a time slot" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {timeOptions
+                                        .filter((time) => {
+                                          const currentValue = getSlotValue(slot);
+                                          const usedByOtherSlot = schedule.slots.some((existingSlot, existingIndex) => existingIndex !== slotIndex && getSlotValue(existingSlot) === time.value);
+                                          return time.value === currentValue || !usedByOtherSlot;
+                                        })
+                                        .map((time) => (
+                                          <SelectItem key={`${day}-slot-${slotIndex}-${time.value}`} value={time.value}>
+                                            {time.label}
+                                          </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <p className="mt-1 text-xs text-gray-500">30-minute fixed slot.</p>
+                                </div>
+
+                                <div className="md:col-span-3 flex justify-end md:justify-end">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => removeDaySlot(day, slotIndex)}
+                                    disabled={schedule.slots.length <= 1}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

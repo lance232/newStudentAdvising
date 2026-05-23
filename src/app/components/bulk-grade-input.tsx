@@ -80,7 +80,7 @@ export function BulkGradeInput() {
     string[]
   >([]);
   const [selectedSemester, setSelectedSemester] = useState(
-    "1st Sem 2025-26",
+    "1st Semester 2025-2026",
   );
   const [subjectCode, setSubjectCode] = useState("");
   const [units, setUnits] = useState(3);
@@ -304,11 +304,11 @@ export function BulkGradeInput() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1st Sem 2025-26">
-                    1st Sem 2025-26
+                  <SelectItem value="1st Semester 2025-2026">
+                    1st Semester 2025-2026
                   </SelectItem>
-                  <SelectItem value="2nd Sem 2025-26">
-                    2nd Sem 2025-26
+                  <SelectItem value="2nd Semester 2025-2026">
+                    2nd Semester 2025-2026
                   </SelectItem>
                   <SelectItem value="Summer 2026">
                     Summer 2026

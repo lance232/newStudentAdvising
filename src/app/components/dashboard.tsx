@@ -2,23 +2,33 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Users, UserCog, Shield, CalendarDays, RefreshCcw, AlertCircle } from "lucide-react";
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
+import { ALL_SEMESTERS_VALUE, buildSemesterLabel, matchesSemesterSelection, sortSemesterLabels } from "./semester-utils";
 
 interface DashboardProps {
   isChairman?: boolean;
+  onOpenStudentsByGradeFilter?: (filter: "no-failed" | "has-failed", semester?: string) => void;
+  gradeSemester: string;
+  onGradeSemesterChange: (semester: string) => void;
 }
 
 interface UserDirectoryRow {
   userId: string;
+  username: string;
   firstName: string;
   lastName: string;
   role: string;
+  email?: string;
+  yearLevelId?: string;
+  yearLevelName?: string;
 }
 
 interface StudentDirectoryRow {
   userId: string;
   studentId: string;
+  username: string;
   fullName: string;
   yearLevelName: string;
 }
@@ -41,6 +51,10 @@ interface PassFailState {
   passed: number;
   failed: number;
 }
+
+type GradeStatusFilter = "no-failed" | "has-failed";
+
+const SEMESTER_ENDPOINTS = ["/Semesters", "/Semesters/active", "/Semesters/current"];
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "https://localhost:53005/api";
@@ -117,6 +131,103 @@ function formatDateLabel(value: unknown): string {
   });
 }
 
+function getArrayPayload<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) {
+    return payload as T[];
+  }
+
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    if (Array.isArray(record.data)) {
+      return record.data as T[];
+    }
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, unknown>;
+      if (Array.isArray(nested.items)) {
+        return nested.items as T[];
+      }
+      if (Array.isArray(nested.grades)) {
+        return nested.grades as T[];
+      }
+    }
+    if (Array.isArray(record.items)) {
+      return record.items as T[];
+    }
+    if (Array.isArray(record.grades)) {
+      return record.grades as T[];
+    }
+  }
+
+  return [];
+}
+
+type SemesterRow = {
+  SemesterId?: number | string | null;
+  semesterId?: number | string | null;
+  Name?: string | null;
+  name?: string | null;
+  SemesterName?: string | null;
+  semesterName?: string | null;
+  SchoolYear?: string | null;
+  schoolYear?: string | null;
+};
+
+function getSemesterRowsPayload(payload: unknown): SemesterRow[] {
+  if (Array.isArray(payload)) {
+    return payload as SemesterRow[];
+  }
+
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+
+    if (record.SemesterId != null || record.semesterId != null) {
+      return [record as SemesterRow];
+    }
+
+    if (Array.isArray(record.data)) {
+      return record.data as SemesterRow[];
+    }
+    if (record.data && typeof record.data === "object") {
+      const nested = record.data as Record<string, unknown>;
+      if (nested.SemesterId != null || nested.semesterId != null) {
+        return [nested as SemesterRow];
+      }
+      if (Array.isArray(nested.items)) {
+        return nested.items as SemesterRow[];
+      }
+    }
+
+    if (Array.isArray(record.items)) {
+      return record.items as SemesterRow[];
+    }
+    if (record.items && typeof record.items === "object") {
+      const nested = record.items as Record<string, unknown>;
+      if (nested.SemesterId != null || nested.semesterId != null) {
+        return [nested as SemesterRow];
+      }
+    }
+  }
+
+  return [];
+}
+
+async function fetchSemesters(headers: Record<string, string>): Promise<SemesterRow[]> {
+  for (const path of SEMESTER_ENDPOINTS) {
+    const response = await fetchWithApiFallback(path, { headers });
+    const payload = await response.json().catch(() => ([]));
+    if (!response.ok) {
+      continue;
+    }
+
+    const rows = getSemesterRowsPayload(payload);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+
+  return [];
+}
+
 function parseNumeric(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -132,59 +243,106 @@ function parseNumeric(value: unknown): number | null {
   return null;
 }
 
-function summarizePassFail(grades: any[]): PassFailState {
-  let passed = 0;
-  let failed = 0;
+function isFailedGrade(grade: any): boolean {
+  const statusRaw = String(
+    grade?.status
+    ?? grade?.Status
+    ?? grade?.remarks
+    ?? grade?.Remarks
+    ?? grade?.result
+    ?? grade?.remark
+    ?? "",
+  ).toLowerCase().replace(/\s+/g, " ").trim();
+  if (/\b(no|not|without)\s+fail(?:ed|ing)?\b/.test(statusRaw) || /\bpass(?:ed)?\s+all\b/.test(statusRaw)) {
+    return false;
+  }
+  if (/\bfail(?:ed|ing)?\b/.test(statusRaw)) {
+    return true;
+  }
+  if (/\bpass(?:ed|ing)?\b/.test(statusRaw)) {
+    return false;
+  }
+
+  const numericValue =
+    parseNumeric(grade?.grade)
+    ?? parseNumeric(grade?.Grade)
+    ?? parseNumeric(grade?.finalGrade)
+    ?? parseNumeric(grade?.FinalGrade)
+    ?? parseNumeric(grade?.gradeValue)
+    ?? parseNumeric(grade?.GradeValue)
+    ?? parseNumeric(grade?.currentGrade)
+    ?? parseNumeric(grade?.CurrentGrade)
+    ?? parseNumeric(grade?.status)
+    ?? parseNumeric(grade?.Status)
+    ?? parseNumeric(grade?.result)
+    ?? parseNumeric(grade?.equivalent)
+    ?? parseNumeric(grade?.gwa);
+
+  return numericValue !== null && numericValue > 3.0;
+}
+
+function summarizePassFailByStudent(students: StudentDirectoryRow[], grades: any[]): PassFailState {
+  if (students.length > 0) {
+    const keyToIndex = new Map<string, number>();
+    const studentGradeKey = (value: string) => `student:${value}`;
+    const userGradeKey = (value: string) => `user:${value}`;
+
+    students.forEach((student, index) => {
+      const studentIdKey = student.studentId.trim();
+      const userIdKey = student.userId.trim();
+
+      if (studentIdKey) {
+        keyToIndex.set(studentGradeKey(studentIdKey), index);
+      }
+      if (userIdKey && userIdKey !== 'Not Set') {
+        keyToIndex.set(userGradeKey(userIdKey), index);
+      }
+    });
+
+    const hasFailedByStudent = new Array(students.length).fill(false);
+
+    grades.forEach((grade) => {
+      const gradeStudentId = String(grade?.studentId ?? grade?.StudentId ?? '').trim();
+      const gradeUserId = String(grade?.userId ?? grade?.UserId ?? '').trim();
+      const matchedIndex =
+        (gradeStudentId ? keyToIndex.get(studentGradeKey(gradeStudentId)) : undefined)
+        ?? (!gradeStudentId && gradeUserId ? keyToIndex.get(userGradeKey(gradeUserId)) : undefined);
+
+      if (matchedIndex === undefined) {
+        return;
+      }
+
+      if (isFailedGrade(grade)) {
+        hasFailedByStudent[matchedIndex] = true;
+      }
+    });
+
+    const failed = hasFailedByStudent.filter(Boolean).length;
+    const passed = students.length - failed;
+    return { passed, failed };
+  }
+
+  const failedStudents = new Set<string>();
+  const allStudents = new Set<string>();
 
   grades.forEach((grade) => {
-    const statusRaw = String(
-      grade?.status
-      ?? grade?.Status
-      ?? grade?.remarks
-      ?? grade?.Remarks
-      ?? grade?.result
-      ?? grade?.remark
-      ?? grade?.currentGrade
-      ?? grade?.CurrentGrade
-      ?? "",
-    ).toLowerCase();
-    if (statusRaw.includes("pass")) {
-      passed += 1;
-      return;
-    }
-    if (statusRaw.includes("fail")) {
-      failed += 1;
+    const key = String(grade?.studentId ?? grade?.StudentId ?? grade?.userId ?? grade?.UserId ?? '').trim();
+    if (!key) {
       return;
     }
 
-    const numericValue =
-      parseNumeric(grade?.grade)
-      ?? parseNumeric(grade?.Grade)
-      ?? parseNumeric(grade?.finalGrade)
-      ?? parseNumeric(grade?.FinalGrade)
-      ?? parseNumeric(grade?.gradeValue)
-      ?? parseNumeric(grade?.GradeValue)
-      ?? parseNumeric(grade?.currentGrade)
-      ?? parseNumeric(grade?.CurrentGrade)
-      ?? parseNumeric(grade?.equivalent)
-      ?? parseNumeric(grade?.gwa);
-
-    if (numericValue === null) {
-      return;
+    allStudents.add(key);
+    if (isFailedGrade(grade)) {
+      failedStudents.add(key);
     }
-
-    if (numericValue <= 3.0) {
-      passed += 1;
-      return;
-    }
-
-    failed += 1;
   });
 
+  const failed = failedStudents.size;
+  const passed = Math.max(0, allStudents.size - failed);
   return { passed, failed };
 }
 
-export function Dashboard({ isChairman = false }: DashboardProps) {
+export function Dashboard({ isChairman = false, onOpenStudentsByGradeFilter, gradeSemester, onGradeSemesterChange }: DashboardProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [summary, setSummary] = useState<SummaryState>({
@@ -193,10 +351,12 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
     chairmen: 0,
     appointments: 0,
   });
-  const [recentStudents, setRecentStudents] = useState<StudentDirectoryRow[]>([]);
   const [recentAppointments, setRecentAppointments] = useState<AppointmentRow[]>([]);
   const [passFail, setPassFail] = useState<PassFailState>({ passed: 0, failed: 0 });
   const [gradeChartError, setGradeChartError] = useState("");
+  const [gradeRows, setGradeRows] = useState<any[]>([]);
+  const [semesterOptions, setSemesterOptions] = useState<string[]>([]);
+  const [studentsForChart, setStudentsForChart] = useState<StudentDirectoryRow[]>([]);
 
   const loadDashboard = async () => {
     setIsLoading(true);
@@ -214,17 +374,46 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
         throw new Error(getErrorMessage(usersPayload, "Unable to fetch users for dashboard."));
       }
 
-      const users = Array.isArray(usersPayload) ? usersPayload : [];
+      let users = Array.isArray(usersPayload) ? usersPayload : [];
+      if (isChairman) {
+        const adminUsersResponse = await fetchWithApiFallback("/admin/users", { headers });
+        const adminUsersPayload = await adminUsersResponse.json().catch(() => ([]));
+        if (adminUsersResponse.ok && Array.isArray(adminUsersPayload)) {
+          users = adminUsersPayload;
+        }
+      }
+
+      const yearLevelsResponse = await fetchWithApiFallback("/Students/year-levels", { headers });
+      const yearLevelsPayload = await yearLevelsResponse.json().catch(() => ([]));
+      const yearLevelLabelById = new Map<string, string>();
+      const yearLevelIds: string[] = [];
+      if (yearLevelsResponse.ok && Array.isArray(yearLevelsPayload)) {
+        yearLevelsPayload.forEach((item: any) => {
+          const id = String(item.yearLevelId ?? item.id ?? item.value ?? "").trim();
+          const label = String(item.yearLevelName ?? item.name ?? item.yearLevel ?? item.label ?? "").trim();
+          if (id && label) {
+            yearLevelLabelById.set(id, label);
+          }
+          if (id) {
+            yearLevelIds.push(id);
+          }
+        });
+      }
+
       const normalizedUsers: UserDirectoryRow[] = users.map((item: any) => ({
         userId: String(item.userId ?? item.UserId ?? item.id ?? "").trim(),
+        username: String(item.username ?? item.Username ?? item.userName ?? item.UserName ?? '').trim(),
         firstName: String(item.firstName ?? item.FirstName ?? "").trim(),
         lastName: String(item.lastName ?? item.LastName ?? "").trim(),
         role: String(item.role ?? item.Role ?? "").toUpperCase().trim(),
+        email: String(item.email ?? item.Email ?? "").trim(),
+        yearLevelId: String(item.yearLevelId ?? item.YearLevelId ?? "").trim(),
+        yearLevelName: String(item.yearLevelName ?? item.YearLevelName ?? item.yearLevel ?? "").trim(),
       }));
 
       setSummary((prev) => ({
         ...prev,
-        students: normalizedUsers.filter((row) => row.role === "STUDENT").length,
+        students: isChairman ? prev.students : normalizedUsers.filter((row) => row.role === "STUDENT").length,
         advisers: normalizedUsers.filter((row) => row.role === "ADVISER").length,
         chairmen: normalizedUsers.filter((row) => row.role === "CHAIRMAN").length,
       }));
@@ -237,11 +426,38 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
         throw new Error(getErrorMessage(studentsPayload, "Unable to fetch students for dashboard."));
       }
 
-      const students = Array.isArray(studentsPayload) ? studentsPayload : [];
-      const normalizedStudents: StudentDirectoryRow[] = students.map((item: any) => {
+      let studentsRowsPayload: any[] = Array.isArray(studentsPayload) ? studentsPayload : [];
+      if (isChairman) {
+        const studentsByYearLevel: any[] = [];
+        const candidateYearLevelIds = yearLevelIds.length > 0 ? yearLevelIds : ["1", "2", "3", "4"];
+        for (const yearLevelId of candidateYearLevelIds) {
+          const byYearLevelResponse = await fetchWithApiFallback(`/Students?yearLevelId=${encodeURIComponent(yearLevelId)}`, { headers });
+          const byYearLevelPayload = await byYearLevelResponse.json().catch(() => ([]));
+          if (byYearLevelResponse.ok && Array.isArray(byYearLevelPayload)) {
+            studentsByYearLevel.push(...byYearLevelPayload);
+          }
+        }
+
+        if (studentsByYearLevel.length > 0) {
+          const mergedStudentRows = [...studentsRowsPayload, ...studentsByYearLevel];
+          const seen = new Set<string>();
+          studentsRowsPayload = mergedStudentRows.filter((item) => {
+            const key = String(item?.studentId ?? item?.StudentId ?? item?.userId ?? item?.UserId ?? "").trim();
+            if (!key || seen.has(key)) {
+              return false;
+            }
+            seen.add(key);
+            return true;
+          });
+        }
+      }
+
+      const students = studentsRowsPayload;
+      const normalizedStudentsFromEndpoint: StudentDirectoryRow[] = students.map((item: any) => {
         const userId = String(item.userId ?? item.UserId ?? "").trim();
         const studentId = String(item.studentId ?? item.StudentId ?? userId).trim();
         const linkedUser = userId ? userById.get(userId) : undefined;
+        const username = String(item.username ?? item.Username ?? item.userName ?? item.UserName ?? linkedUser?.username ?? '').trim();
         const firstName = String(item.firstName ?? item.FirstName ?? linkedUser?.firstName ?? "").trim();
         const lastName = String(item.lastName ?? item.LastName ?? linkedUser?.lastName ?? "").trim();
         const fullName = `${firstName} ${lastName}`.trim() || studentId || userId || "Unknown Student";
@@ -249,12 +465,29 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
         return {
           userId: userId || "Not Set",
           studentId: studentId || "Not Set",
+          username: username || studentId || userId || 'Not Set',
           fullName,
           yearLevelName: String(item.yearLevelName ?? item.YearLevelName ?? "Not Set") || "Not Set",
         };
       });
 
-      setRecentStudents(normalizedStudents.slice(0, 8));
+      const normalizedStudentsByUserId = new Map<string, StudentDirectoryRow>();
+      normalizedStudentsFromEndpoint.forEach((student) => {
+        if (student.userId && student.userId !== "Not Set") {
+          normalizedStudentsByUserId.set(student.userId, student);
+        }
+      });
+
+      const normalizedStudents: StudentDirectoryRow[] = isChairman
+        ? normalizedStudentsFromEndpoint
+        : normalizedStudentsFromEndpoint;
+
+      setStudentsForChart(normalizedStudents);
+
+      setSummary((prev) => ({
+        ...prev,
+        students: normalizedStudents.length,
+      }));
 
       const appointmentsResponse = await fetchWithApiFallback("/Appointments", { headers });
       const appointmentsPayload = await appointmentsResponse.json().catch(() => ([]));
@@ -279,41 +512,75 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
       // Grade distribution pie chart.
       setGradeChartError("");
       try {
-        const gradesResponse = await fetchWithApiFallback("/Grades", { headers });
+        const [gradesResponse, semesters] = await Promise.all([
+          fetchWithApiFallback("/Grades", { headers }),
+          fetchSemesters(headers),
+        ]);
         const gradesPayload = await gradesResponse.json().catch(() => ([]));
+        let collectedGrades: any[] = [];
 
         if (!gradesResponse.ok) {
           // Fallback to per-student grades endpoint when /Grades is unavailable.
-          const studentGradeRows: any[] = [];
           for (const student of normalizedStudents) {
             const response = await fetchWithApiFallback(`/Students/${student.studentId}/grades`, { headers });
             const payload = await response.json().catch(() => ([]));
-            if (response.ok && Array.isArray(payload)) {
-              studentGradeRows.push(...payload);
+            if (response.ok) {
+              collectedGrades.push(...getArrayPayload(payload));
             }
           }
 
-          if (studentGradeRows.length > 0) {
-            setPassFail(summarizePassFail(studentGradeRows));
-          } else {
-            setPassFail({ passed: 0, failed: 0 });
+          if (collectedGrades.length === 0) {
             setGradeChartError(getErrorMessage(gradesPayload, "Unable to load grade distribution data."));
           }
         } else {
-          const gradeRows = Array.isArray(gradesPayload) ? gradesPayload : [];
-          setPassFail(summarizePassFail(gradeRows));
+          collectedGrades = getArrayPayload(gradesPayload);
         }
+
+        const semesterLabelById = new Map<string, string>();
+        semesters.forEach((row) => {
+          const id = String(row.SemesterId ?? row.semesterId ?? "").trim();
+          if (!id) {
+            return;
+          }
+          const name = String(row.SemesterName ?? row.semesterName ?? row.Name ?? row.name ?? "").trim();
+          const schoolYear = String(row.SchoolYear ?? row.schoolYear ?? "").trim();
+          const label = buildSemesterLabel(name, schoolYear);
+          if (label && label !== "Not Set") {
+            semesterLabelById.set(id, label);
+          }
+        });
+
+        const normalizedGrades = collectedGrades.map((grade) => {
+          const rawLabel = buildSemesterLabel(
+            grade?.semesterName ?? grade?.SemesterName ?? grade?.semester,
+            grade?.schoolYear ?? grade?.SchoolYear,
+          );
+          const semesterId = String(grade?.semesterId ?? grade?.SemesterId ?? "").trim();
+          const fallbackLabel = semesterId ? (semesterLabelById.get(semesterId) ?? "") : "";
+          const semesterLabel = rawLabel !== "Not Set" ? rawLabel : (fallbackLabel || "Not Set");
+
+          return {
+            ...grade,
+            semesterLabel,
+          };
+        });
+
+        setGradeRows(normalizedGrades);
+        setSemesterOptions(sortSemesterLabels(normalizedGrades.map((grade) => grade.semesterLabel)));
       } catch {
-        setPassFail({ passed: 0, failed: 0 });
+        setGradeRows([]);
+        setSemesterOptions([]);
         setGradeChartError("Unable to load grade distribution data.");
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Unable to load dashboard.");
       setSummary({ students: 0, advisers: 0, chairmen: 0, appointments: 0 });
-      setRecentStudents([]);
       setRecentAppointments([]);
       setPassFail({ passed: 0, failed: 0 });
       setGradeChartError("");
+      setGradeRows([]);
+      setSemesterOptions([]);
+      setStudentsForChart([]);
     } finally {
       setIsLoading(false);
     }
@@ -322,6 +589,16 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  useEffect(() => {
+    if (gradeRows.length === 0) {
+      setPassFail({ passed: 0, failed: 0 });
+      return;
+    }
+
+    const filteredGrades = gradeRows.filter((grade) => matchesSemesterSelection(grade.semesterLabel, gradeSemester));
+    setPassFail(summarizePassFailByStudent(studentsForChart, filteredGrades));
+  }, [gradeRows, studentsForChart, gradeSemester]);
 
   const roleLabel = isChairman ? "Chairman" : "Adviser";
 
@@ -340,17 +617,29 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
 
   const passFailChartData = useMemo(() => {
     return [
-      { name: "1.0-3.0 (Pass)", value: passFail.passed, fill: "#16a34a" },
-      { name: "3.1-5.0 (Failed)", value: passFail.failed, fill: "#ef4444" },
+      { name: "Students with no failed grade", value: passFail.passed, fill: "#16a34a", filter: "no-failed" as GradeStatusFilter },
+      { name: "Students with at least one failed grade", value: passFail.failed, fill: "#ef4444", filter: "has-failed" as GradeStatusFilter },
     ];
   }, [passFail]);
+
+  const handlePieSliceClick = (entry?: { filter?: GradeStatusFilter; value?: number }) => {
+    if (!entry?.filter || !onOpenStudentsByGradeFilter) {
+      return;
+    }
+
+    if ((entry.value ?? 0) <= 0) {
+      return;
+    }
+
+    onOpenStudentsByGradeFilter(entry.filter, gradeSemester);
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="tracking-tight">Dashboard Overview</h2>
-          <p className="text-gray-600">Live backend data for {roleLabel} view</p>
+          <p className="text-gray-600">Summary insights for the {roleLabel} workspace.</p>
         </div>
         <Button
           variant="outline"
@@ -420,71 +709,85 @@ export function Dashboard({ isChairman = false }: DashboardProps) {
         </Card>
       </div>
 
-      <Card className="border-yellow-200 shadow-md">
-        <CardHeader className="bg-gradient-to-r from-yellow-50 to-green-50 border-b border-yellow-200">
-          <CardTitle className="text-green-900">Grade Distribution</CardTitle>
-          <CardDescription>Current semester grade breakdown (pass vs failed)</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-6">
-          {gradeChartError && (
-            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              {gradeChartError}
-            </div>
-          )}
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={passFailChartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
-                outerRadius={95}
-                dataKey="value"
-              >
-                {passFailChartData.map((entry) => (
-                  <Cell key={entry.name} fill={entry.fill} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="border-green-200 shadow-md">
-          <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
-            <CardTitle className="text-green-900">Active Students</CardTitle>
-            <CardDescription>Source: GET /api/Students</CardDescription>
+        <Card className="border-yellow-200 shadow-md">
+          <CardHeader className="bg-gradient-to-r from-yellow-50 to-green-50 border-b border-yellow-200">
+            <CardTitle className="text-green-900">Grade Distribution</CardTitle>
+            <CardDescription>Click a slice to open the Students tab with the matching grade status filter.</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
-            {recentStudents.length === 0 ? (
-              <p className="text-sm text-gray-500">No active students returned by backend.</p>
-            ) : (
-              <div className="space-y-3">
-                {recentStudents.map((row) => (
-                  <div key={`${row.studentId}-${row.userId}`} className="flex items-center justify-between border-b pb-2 last:border-0">
-                    <div>
-                      <p className="font-medium text-gray-900">{row.fullName}</p>
-                      <p className="text-xs text-gray-500">Student ID: {row.studentId}</p>
-                    </div>
-                    <Badge className="bg-green-100 text-green-800 border-green-300">{row.yearLevelName}</Badge>
-                  </div>
-                ))}
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-gray-600">Filter grade distribution by semester.</p>
+              <Select value={gradeSemester} onValueChange={onGradeSemesterChange}>
+                <SelectTrigger className="w-full sm:w-64">
+                  <SelectValue placeholder="Filter by semester" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SEMESTERS_VALUE}>All Semesters</SelectItem>
+                  {semesterOptions.length === 0 ? (
+                    <SelectItem value="__none" disabled>No semesters available</SelectItem>
+                  ) : (
+                    semesterOptions.map((semester) => (
+                      <SelectItem key={semester} value={semester}>
+                        {semester}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            {gradeChartError && (
+              <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {gradeChartError}
               </div>
             )}
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie
+                  data={passFailChartData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={false}
+                  outerRadius={95}
+                  dataKey="value"
+                  onClick={(entry) => handlePieSliceClick(entry as { filter?: GradeStatusFilter; value?: number })}
+                >
+                  {passFailChartData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.fill} className="cursor-pointer" />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {passFailChartData.map((entry) => (
+                <button
+                  key={entry.name}
+                  type="button"
+                  className="flex items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-left hover:bg-gray-50"
+                  onClick={() => handlePieSliceClick(entry)}
+                  disabled={entry.value <= 0}
+                >
+                  <span className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.fill }} />
+                    {entry.name}
+                  </span>
+                  <span className="text-sm font-semibold text-green-900">{entry.value}</span>
+                </button>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-green-200 shadow-md">
           <CardHeader className="bg-gradient-to-r from-green-50 to-yellow-50 border-b border-green-200">
             <CardTitle className="text-green-900">Recent Appointments</CardTitle>
-            <CardDescription>Source: GET /api/Appointments</CardDescription>
+            <CardDescription>Latest advising appointment activity.</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             {recentAppointments.length === 0 ? (
-              <p className="text-sm text-gray-500">No appointment records returned by backend.</p>
+              <p className="text-sm text-gray-500">No appointment records are available.</p>
             ) : (
               <div className="space-y-3">
                 {recentAppointments.map((row) => (
