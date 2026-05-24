@@ -1123,16 +1123,25 @@ export function StudentAppointmentBooking({
         }
       }
 
+      const studentId = String(dashboard?.studentId ?? dashboard?.StudentId ?? '').trim();
+      if (!studentId) {
+        setSubmitError('Unable to determine your student id. Please refresh and try again.');
+        return;
+      }
+
       const appointmentTime = selectedSlot;
+      const appointmentTimeWithSeconds = appointmentTime.match(/^\d{1,2}:\d{2}$/)
+        ? `${appointmentTime}:00`
+        : appointmentTime;
+      const appointmentDateTime = `${appointmentDate}T00:00:00`;
       const body = {
+        StudentId: studentId,
         AdviserId: selectedAdviserId,
         SemesterId: semesterId,
         AppointmentType: appointmentType.trim(),
-        AppointmentDate: appointmentDate,
-        AppointmentTime: appointmentTime,
+        AppointmentDate: appointmentDateTime,
+        AppointmentTime: appointmentTimeWithSeconds,
         Status: 'Upcoming',
-        Notes: notes.trim() || undefined,
-        CancellationReason: notes.trim() || undefined,
       };
 
       const response = await fetchWithRouteCandidates(
