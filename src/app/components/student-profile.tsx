@@ -1034,10 +1034,6 @@ export function StudentProfile({ onBack, studentId, onOpenAppointmentDetails }: 
         adviserName = sessionName;
       }
 
-      if (!adviserName && (sessionRole === 'adviser' || sessionRole === 'chairman')) {
-        adviserName = sessionName;
-      }
-
       return {
         ...note,
         adviserName: adviserName || 'Not Set',

@@ -113,6 +113,25 @@ function getErrorMessage(payload: unknown, fallback: string): string {
   return data.message || data.error || data.title || fallback;
 }
 
+function isDeletedAdvisor(item: any): boolean {
+  const deletedFlag = item?.isDeleted ?? item?.deleted ?? item?.isArchived ?? item?.isRemoved;
+  if (typeof deletedFlag === 'boolean') {
+    return deletedFlag;
+  }
+
+  const deletedDate = item?.deletedAt ?? item?.deleteDate ?? item?.deletedDate ?? item?.deletedOn ?? item?.deletedTime;
+  if (deletedDate) {
+    return true;
+  }
+
+  const status = String(item?.status ?? item?.accountStatus ?? '').toLowerCase();
+  if (status === 'deleted' || status === 'removed') {
+    return true;
+  }
+
+  return false;
+}
+
 export function ChairmanDashboard() {
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [yearLevels, setYearLevels] = useState<YearLevelOption[]>([]);
@@ -147,7 +166,7 @@ export function ChairmanDashboard() {
         throw new Error(getErrorMessage(payload, 'Unable to fetch advisers from backend.'));
       }
 
-      const adviserRows = Array.isArray(payload) ? payload : [];
+      const adviserRows = (Array.isArray(payload) ? payload : []).filter((item: any) => !isDeletedAdvisor(item));
 
       const yearLevelById = new Map<string, string>();
       setYearLevelsError('');
