@@ -257,6 +257,38 @@ async function fetchUsernameByUserId(userId: string, headers: Record<string, str
   return String(match?.username ?? match?.Username ?? match?.userName ?? match?.UserName ?? '').trim();
 }
 
+async function fetchAdviserNameById(adviserId: string, headers: Record<string, string>): Promise<string> {
+  if (!adviserId || adviserId === 'Not Set') {
+    return '';
+  }
+
+  try {
+    const response = await fetchWithApiFallback('/Advisers', { headers });
+    const payload = await response.json().catch(() => ([]));
+    if (response.ok && Array.isArray(payload)) {
+      const rows = payload as any[];
+      const match = rows.find((row) => {
+        const rowId = String(row.id ?? row.adviserId ?? row.advisorId ?? row.userId ?? row.username ?? row.userName ?? '').trim();
+        const userId = String(row.user?.id ?? row.userId ?? row.UserId ?? '').trim();
+        const username = String(row.user?.username ?? row.username ?? row.userName ?? '').trim();
+        return adviserId === rowId || adviserId === userId || adviserId === username;
+      });
+
+      if (match) {
+        const firstName = String(match.firstName ?? match.user?.firstName ?? '').trim();
+        const lastName = String(match.lastName ?? match.user?.lastName ?? '').trim();
+        const fullName = `${firstName} ${lastName}`.trim();
+        return fullName
+          || String(match.user?.username ?? match.username ?? match.userName ?? match.adviserId ?? match.advisorId ?? '').trim();
+      }
+    }
+  } catch {
+    // Fall through to users endpoint.
+  }
+
+  return fetchUsernameByUserId(adviserId, headers);
+}
+
 function parseGradeValue(value: string): number | null {
   const parsed = Number(value);
   if (Number.isFinite(parsed)) {
@@ -1022,12 +1054,19 @@ export function StudentProfile({ onBack, studentId, onOpenAppointmentDetails }: 
 
     const sessionName = getSessionUserName();
     const sessionRole = getSessionRole();
+    const adviserNameCache = new Map<string, string>();
 
     const adviserNameEntries = await Promise.all(advisingNotes.map(async (note) => {
       let adviserName = note.adviserName;
 
       if (!adviserName && note.adviserId) {
-        adviserName = await fetchUsernameByUserId(note.adviserId, headers).catch(() => '');
+        const cached = adviserNameCache.get(note.adviserId);
+        if (cached !== undefined) {
+          adviserName = cached;
+        } else {
+          adviserName = await fetchAdviserNameById(note.adviserId, headers).catch(() => '');
+          adviserNameCache.set(note.adviserId, adviserName);
+        }
       }
 
       if (!adviserName && note.adviserId && note.adviserId === getSessionUserId()) {
