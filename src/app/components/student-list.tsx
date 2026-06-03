@@ -552,11 +552,13 @@ export function StudentList({ onSelectStudent, gradeFilter, onGradeFilterChange,
         const username = String(adviser.username ?? adviser.userName ?? adviser.user?.username ?? '').trim();
         const firstName = String(adviser.firstName ?? adviser.user?.firstName ?? '').trim();
         const lastName = String(adviser.lastName ?? adviser.user?.lastName ?? '').trim();
-        const fullName = `${firstName} ${lastName}`.trim() || username || 'Adviser';
+        const fullName = `${firstName} ${lastName}`.trim() || username;
 
-        [id, adviserId, userId].filter(Boolean).forEach((key) => {
-          adviserNameByKey.set(key, fullName);
-        });
+        if (fullName) {
+          [id, adviserId, userId].filter(Boolean).forEach((key) => {
+            adviserNameByKey.set(key, fullName);
+          });
+        }
 
         if (currentUserIdKey && (currentUserIdKey === id || currentUserIdKey === adviserId || currentUserIdKey === userId)) {
           [id, adviserId, userId].filter(Boolean).forEach((key) => adviserKeysForCurrentUser.add(key));
@@ -578,7 +580,11 @@ export function StudentList({ onSelectStudent, gradeFilter, onGradeFilterChange,
           return;
         }
 
-        const adviserName = adviserNameByKey.get(assignmentAdviserKey) ?? 'Adviser';
+        const adviserName = adviserNameByKey.get(assignmentAdviserKey) ?? '';
+
+        if (!adviserName) {
+          return;
+        }
 
         if (yearLevelId) {
           if (!adviserNamesByYearLevel.has(yearLevelId)) {
@@ -763,6 +769,22 @@ export function StudentList({ onSelectStudent, gradeFilter, onGradeFilterChange,
     );
   });
 
+  const sortedStudents = useMemo(() => {
+    return [...filteredStudents].sort((a, b) => {
+      const rankDiff = getYearLevelRank(a.yearLevelName) - getYearLevelRank(b.yearLevelName);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+
+      const lastNameDiff = a.lastName.localeCompare(b.lastName);
+      if (lastNameDiff !== 0) {
+        return lastNameDiff;
+      }
+
+      return a.firstName.localeCompare(b.firstName);
+    });
+  }, [filteredStudents]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -868,7 +890,7 @@ export function StudentList({ onSelectStudent, gradeFilter, onGradeFilterChange,
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredStudents.map((student) => (
+                    sortedStudents.map((student) => (
                       <TableRow key={student.id}>
                         <TableCell className="font-medium">{student.username || 'Not Set'}</TableCell>
                         <TableCell>{student.firstName}</TableCell>
@@ -898,7 +920,7 @@ export function StudentList({ onSelectStudent, gradeFilter, onGradeFilterChange,
               </Table>
             </div>
 
-            {filteredStudents.length === 0 && (
+            {sortedStudents.length === 0 && (
               <div className="text-center py-8 text-gray-500">
                 {students.length === 0
                   ? (isChairman

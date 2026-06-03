@@ -340,6 +340,11 @@ export default function App() {
     clearPersistedSession();
     localStorage.removeItem('auth_token');
     sessionStorage.removeItem('auth_token');
+    try {
+      window.history.replaceState({}, '', '/');
+    } catch {
+      // Ignore navigation errors on logout.
+    }
   };
 
   // Show login page if not logged in
