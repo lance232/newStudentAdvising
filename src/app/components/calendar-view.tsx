@@ -874,13 +874,6 @@ export function CalendarView() {
     );
   };
 
-  const handleSaveNotes = async () => {
-    if (!selectedAppointment) {
-      return;
-    }
-
-    const appointmentId = getAppointmentId(selectedAppointment);
-
   const rescheduleDayName = useMemo(() => {
     if (!rescheduleDate) {
       return '';
@@ -975,6 +968,13 @@ export function CalendarView() {
       setRescheduleTime(rescheduleSlots[0].value);
     }
   }, [rescheduleSlots, rescheduleTime]);
+
+  const handleSaveNotes = async () => {
+    if (!selectedAppointment) {
+      return;
+    }
+
+    const appointmentId = getAppointmentId(selectedAppointment);
     if (!appointmentId) {
       setActionError('Unable to save notes: missing appointment id.');
       return;
