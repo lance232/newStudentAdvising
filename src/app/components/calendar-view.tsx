@@ -18,6 +18,10 @@ interface CalendarAppointment {
   StudentName?: string | null;
   adviserId?: number | string | null;
   AdviserId?: number | string | null;
+  adviserUserId?: number | string | null;
+  AdviserUserId?: number | string | null;
+  advisorId?: number | string | null;
+  AdvisorId?: number | string | null;
   adviserName?: string | null;
   AdviserName?: string | null;
   semesterId?: number | string | null;
@@ -82,7 +86,8 @@ type SlotOption = {
 };
 
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
+  (((import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) as string | undefined)?.replace(/\/$/, '')
+  ?? 'https://localhost:53005/api';
 
 const CALENDAR_TAB_STORAGE_KEY = 'calendar_tab';
 const CALENDAR_OPEN_APPOINTMENT_KEY = 'calendar_open_appointment';
@@ -423,7 +428,15 @@ function getAppointmentAdviserId(item: CalendarAppointment | null): string {
     return '';
   }
 
-  return String(item.adviserId ?? item.AdviserId ?? '').trim();
+  return String(
+    item.adviserId
+    ?? item.AdviserId
+    ?? item.adviserUserId
+    ?? item.AdviserUserId
+    ?? item.advisorId
+    ?? item.AdvisorId
+    ?? '',
+  ).trim();
 }
 
 function normalizeAppointments(payload: CalendarPayload, key: 'upcoming' | 'completed' | 'cancelled'): CalendarAppointment[] {
@@ -926,7 +939,12 @@ export function CalendarView() {
       return '';
     }
 
-    const parsed = new Date(rescheduleDate);
+    const [year, month, day] = rescheduleDate.split('-').map((value) => Number(value));
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return '';
+    }
+
+    const parsed = new Date(year, month - 1, day);
     if (Number.isNaN(parsed.getTime())) {
       return '';
     }

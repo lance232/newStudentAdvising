@@ -131,7 +131,8 @@ interface SemesterRow {
 }
 
 const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
+  (((import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) as string | undefined)?.replace(/\/$/, '')
+  ?? 'https://localhost:53005/api';
 
 const DAILY_FAILED_REMINDER_KEY = 'student_failed_grade_last_reminder';
 const APPOINTMENT_REMINDER_KEY = 'appointment_day_before_reminder';
@@ -653,13 +654,18 @@ export function Notifications({
   };
 
   const loadNotifications = async () => {
-    setIsLoading(true);
-    setLoadError('');
+    const shouldShowLoading = notifications.length === 0;
+    if (shouldShowLoading) {
+      setIsLoading(true);
+      setLoadError('');
+    }
 
     const token = getAuthToken();
     if (!token) {
-      setNotifications([]);
-      setIsLoading(false);
+      if (shouldShowLoading) {
+        setNotifications([]);
+        setIsLoading(false);
+      }
       return;
     }
 
@@ -934,12 +940,18 @@ export function Notifications({
         return;
       }
 
-      setNotifications([]);
+      if (shouldShowLoading) {
+        setNotifications([]);
+      }
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Unable to load notifications.');
-      setNotifications([]);
+      if (shouldShowLoading) {
+        setLoadError(err instanceof Error ? err.message : 'Unable to load notifications.');
+        setNotifications([]);
+      }
     } finally {
-      setIsLoading(false);
+      if (shouldShowLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -1094,12 +1106,6 @@ export function Notifications({
 
     if (notification.action.kind === 'calendar') {
       onCalendarNavigate?.(notification.action.tab);
-      setIsOpen(false);
-      return;
-    }
-
-    if (notification.action.kind === 'students') {
-      onStudentsNavigate?.();
       setIsOpen(false);
       return;
     }
