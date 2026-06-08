@@ -87,6 +87,7 @@ const API_BASE_URL =
 const CALENDAR_TAB_STORAGE_KEY = 'calendar_tab';
 const CALENDAR_OPEN_APPOINTMENT_KEY = 'calendar_open_appointment';
 const AVAILABILITY_INTERVAL_MINUTES = 30;
+const SESSION_STORAGE_KEY = 'app_session';
 
 function getTabStorage(): Storage {
   if (localStorage.getItem('auth_token')) {
@@ -174,6 +175,22 @@ function getErrorMessage(payload: unknown, fallback: string): string {
   }
 
   return data.message || data.error || data.title || fallback;
+}
+
+function getCurrentUserId(): string {
+  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY)
+    ?? localStorage.getItem(SESSION_STORAGE_KEY)
+    ?? '';
+  if (!rawSession) {
+    return '';
+  }
+
+  try {
+    const session = JSON.parse(rawSession) as { currentUser?: { id?: string } };
+    return String(session.currentUser?.id ?? '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function normalizeDay(dayValue: string): string {
@@ -902,7 +919,7 @@ export function CalendarView() {
 
     const selectedDateValue = rescheduleDate.split('T')[0];
     const selectedAppointmentId = getAppointmentId(selectedAppointment);
-    const selectedAdviserId = String(selectedAppointment.adviserId ?? selectedAppointment.AdviserId ?? '').trim();
+    const currentUserId = getCurrentUserId();
     const booked = new Set<string>();
 
     [...upcomingAppointments, ...completedAppointments, ...cancelledAppointments].forEach((row) => {
@@ -912,7 +929,7 @@ export function CalendarView() {
       }
 
       const rowAdviserId = String(row.adviserId ?? row.AdviserId ?? '').trim();
-      if (selectedAdviserId && rowAdviserId && rowAdviserId !== selectedAdviserId) {
+      if (currentUserId && rowAdviserId && rowAdviserId !== currentUserId) {
         return;
       }
 
