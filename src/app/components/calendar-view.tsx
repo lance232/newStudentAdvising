@@ -177,22 +177,6 @@ function getErrorMessage(payload: unknown, fallback: string): string {
   return data.message || data.error || data.title || fallback;
 }
 
-function getCurrentUserId(): string {
-  const rawSession = sessionStorage.getItem(SESSION_STORAGE_KEY)
-    ?? localStorage.getItem(SESSION_STORAGE_KEY)
-    ?? '';
-  if (!rawSession) {
-    return '';
-  }
-
-  try {
-    const session = JSON.parse(rawSession) as { currentUser?: { id?: string } };
-    return String(session.currentUser?.id ?? '').trim();
-  } catch {
-    return '';
-  }
-}
-
 function normalizeDay(dayValue: string): string {
   const day = dayValue.trim().toLowerCase();
   if (day === 'mon') return 'Monday';
@@ -434,6 +418,14 @@ function getAppointmentId(item: CalendarAppointment): string {
   return String(item.appointmentId ?? item.AppointmentId ?? '').trim();
 }
 
+function getAppointmentAdviserId(item: CalendarAppointment | null): string {
+  if (!item) {
+    return '';
+  }
+
+  return String(item.adviserId ?? item.AdviserId ?? '').trim();
+}
+
 function normalizeAppointments(payload: CalendarPayload, key: 'upcoming' | 'completed' | 'cancelled'): CalendarAppointment[] {
   if (key === 'upcoming') {
     return payload.upcomingAppointments ?? payload.UpcomingAppointments ?? [];
@@ -581,21 +573,11 @@ export function CalendarView() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
-      const [response, availabilityResponse] = await Promise.all([
-        fetchWithApiFallback('/Appointments/calendar', { headers }),
-        fetchWithApiFallback('/advisers/me/availabilities', { headers }),
-      ]);
+      const response = await fetchWithApiFallback('/Appointments/calendar', { headers });
       const payload = await response.json().catch(() => ({}));
-      const availabilityPayload = await availabilityResponse.json().catch(() => ([]));
 
       if (!response.ok) {
         throw new Error(getErrorMessage(payload, 'Unable to load appointment calendar.'));
-      }
-
-      if (availabilityResponse.ok) {
-        setAvailabilities(Array.isArray(availabilityPayload) ? availabilityPayload : []);
-      } else {
-        setAvailabilities([]);
       }
 
       const normalized = payload as CalendarPayload;
@@ -608,7 +590,6 @@ export function CalendarView() {
       setUpcomingAppointments([]);
       setCompletedAppointments([]);
       setCancelledAppointments([]);
-      setAvailabilities([]);
       return null;
     } finally {
       setIsLoading(false);
@@ -618,6 +599,55 @@ export function CalendarView() {
   useEffect(() => {
     loadCalendar();
   }, []);
+
+  useEffect(() => {
+    if (!detailOpen || !selectedAppointment) {
+      setAvailabilities([]);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadRescheduleAvailability = async () => {
+      const token = getAuthToken();
+      const headers = {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      const adviserId = getAppointmentAdviserId(selectedAppointment);
+      const availabilityPaths = adviserId
+        ? [
+            `/advisers/${encodeURIComponent(adviserId)}/availabilities`,
+            `/Advisers/${encodeURIComponent(adviserId)}/availabilities`,
+            '/advisers/me/availabilities',
+          ]
+        : ['/advisers/me/availabilities'];
+
+      try {
+        const response = await fetchWithPathCandidates(availabilityPaths, { headers });
+        const payload = await response.json().catch(() => ([]));
+        if (isCancelled) {
+          return;
+        }
+
+        if (response.ok) {
+          setAvailabilities(getArrayPayload<AvailabilityRow>(payload));
+        } else {
+          setAvailabilities([]);
+        }
+      } catch {
+        if (!isCancelled) {
+          setAvailabilities([]);
+        }
+      }
+    };
+
+    loadRescheduleAvailability();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [detailOpen, selectedAppointment]);
 
   useEffect(() => {
     getTabStorage().setItem(CALENDAR_TAB_STORAGE_KEY, activeTab);
@@ -913,13 +943,13 @@ export function CalendarView() {
   }, [availabilities, rescheduleDayName]);
 
   const bookedRescheduleTimes = useMemo(() => {
-    if (!rescheduleDate || !selectedAppointment) {
+    const appointmentAdviserId = getAppointmentAdviserId(selectedAppointment);
+    if (!rescheduleDate || !selectedAppointment || !appointmentAdviserId) {
       return new Set<string>();
     }
 
     const selectedDateValue = rescheduleDate.split('T')[0];
     const selectedAppointmentId = getAppointmentId(selectedAppointment);
-    const currentUserId = getCurrentUserId();
     const booked = new Set<string>();
 
     [...upcomingAppointments, ...completedAppointments, ...cancelledAppointments].forEach((row) => {
@@ -929,7 +959,7 @@ export function CalendarView() {
       }
 
       const rowAdviserId = String(row.adviserId ?? row.AdviserId ?? '').trim();
-      if (currentUserId && rowAdviserId && rowAdviserId !== currentUserId) {
+      if (rowAdviserId && rowAdviserId !== appointmentAdviserId) {
         return;
       }
 
@@ -938,7 +968,7 @@ export function CalendarView() {
         return;
       }
 
-      const appointmentTime = normalizeAppointmentTime(row.appointmentTime ?? row.AppointmentTime);
+      const appointmentTime = normalizeTimeValue(String(row.appointmentTime ?? row.AppointmentTime ?? '').trim());
       if (appointmentTime) {
         booked.add(appointmentTime);
       }
