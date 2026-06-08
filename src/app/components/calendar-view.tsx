@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { AlertCircle, Calendar as CalendarIcon, Clock, RefreshCcw, User } from 'lucide-react';
 
 interface CalendarAppointment {
@@ -61,11 +62,31 @@ interface AppointmentNoteRow {
   AdviserNotes?: string | null;
 }
 
+interface AvailabilityRow {
+  dayOfWeek?: string | null;
+  DayOfWeek?: string | null;
+  startTime?: string | null;
+  StartTime?: string | null;
+  endTime?: string | null;
+  EndTime?: string | null;
+  location?: string | null;
+  Location?: string | null;
+  slots?: unknown;
+  Slots?: unknown;
+}
+
+type SlotOption = {
+  value: string;
+  label: string;
+  sortMinutes: number;
+};
+
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'https://localhost:53005/api';
 
 const CALENDAR_TAB_STORAGE_KEY = 'calendar_tab';
 const CALENDAR_OPEN_APPOINTMENT_KEY = 'calendar_open_appointment';
+const AVAILABILITY_INTERVAL_MINUTES = 30;
 
 function getTabStorage(): Storage {
   if (localStorage.getItem('auth_token')) {
@@ -153,6 +174,170 @@ function getErrorMessage(payload: unknown, fallback: string): string {
   }
 
   return data.message || data.error || data.title || fallback;
+}
+
+function normalizeDay(dayValue: string): string {
+  const day = dayValue.trim().toLowerCase();
+  if (day === 'mon') return 'Monday';
+  if (day === 'tue' || day === 'tues') return 'Tuesday';
+  if (day === 'wed') return 'Wednesday';
+  if (day === 'thu' || day === 'thur' || day === 'thurs') return 'Thursday';
+  if (day === 'fri') return 'Friday';
+  if (day === 'sat') return 'Saturday';
+  if (day === 'sun') return 'Sunday';
+  return dayValue.trim();
+}
+
+function parseTimeToMinutes(time: string): number {
+  const text = String(time ?? '').trim();
+  if (!text) {
+    return -1;
+  }
+
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?$/i);
+  if (!match) {
+    return -1;
+  }
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridian = match[3]?.toLowerCase();
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return -1;
+  }
+
+  if (meridian === 'pm' && hours < 12) {
+    hours += 12;
+  }
+
+  if (meridian === 'am' && hours === 12) {
+    hours = 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function normalizeTimeValue(rawTime: string): string {
+  const minutes = parseTimeToMinutes(rawTime);
+  if (minutes < 0) {
+    return String(rawTime ?? '').trim();
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+function formatStandardTime(rawTime: string): string {
+  const minutes = parseTimeToMinutes(rawTime);
+  if (minutes < 0) {
+    return String(rawTime ?? '').trim();
+  }
+
+  const hours24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const period = hours24 >= 12 ? 'pm' : 'am';
+  const hours12 = hours24 % 12 || 12;
+  return `${hours12}:${String(mins).padStart(2, '0')} ${period}`;
+}
+
+function parseSlotOptionFromTimes(startTime: string, endTime: string): SlotOption | null {
+  const start = String(startTime ?? '').trim();
+  const end = String(endTime ?? '').trim();
+  if (!start) {
+    return null;
+  }
+
+  const startMinutes = parseTimeToMinutes(start);
+  const endMinutes = parseTimeToMinutes(end);
+
+  return {
+    value: normalizeTimeValue(start),
+    label: end ? `${formatStandardTime(start)} - ${formatStandardTime(end)}` : formatStandardTime(start),
+    sortMinutes: startMinutes >= 0 ? startMinutes : endMinutes,
+  };
+}
+
+function normalizeSlots(rawSlots: unknown): SlotOption[] {
+  if (!Array.isArray(rawSlots)) {
+    return [];
+  }
+
+  const slots = rawSlots
+    .map((slot) => {
+      if (typeof slot === 'string') {
+        const text = slot.trim();
+        if (!text) {
+          return null;
+        }
+
+        const parts = text.split('-').map((part) => part.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          return parseSlotOptionFromTimes(parts[0], parts[1]);
+        }
+
+        return parseSlotOptionFromTimes(text, '');
+      }
+
+      if (slot && typeof slot === 'object') {
+        const record = slot as Record<string, unknown>;
+        const direct = String(record.slot ?? record.Slot ?? record.time ?? record.Time ?? record.label ?? record.Label ?? '').trim();
+        if (direct) {
+          const parts = direct.split('-').map((part) => part.trim()).filter(Boolean);
+          if (parts.length >= 2) {
+            return parseSlotOptionFromTimes(parts[0], parts[1]);
+          }
+
+          return parseSlotOptionFromTimes(direct, '');
+        }
+
+        const start = String(record.startTime ?? record.StartTime ?? '').trim();
+        const end = String(record.endTime ?? record.EndTime ?? '').trim();
+        if (start || end) {
+          return parseSlotOptionFromTimes(start, end);
+        }
+      }
+
+      return null;
+    })
+    .filter((slot): slot is SlotOption => Boolean(slot));
+
+  const unique = new Map<string, SlotOption>();
+  slots.forEach((slot) => {
+    if (!unique.has(slot.value)) {
+      unique.set(slot.value, slot);
+    }
+  });
+
+  return Array.from(unique.values());
+}
+
+function createThirtyMinuteSlots(startTime: string, endTime: string): SlotOption[] {
+  const startMinutes = parseTimeToMinutes(startTime);
+  const endMinutes = parseTimeToMinutes(endTime);
+  if (startMinutes < 0 || endMinutes <= startMinutes) {
+    return [];
+  }
+
+  const slots: SlotOption[] = [];
+  for (let minute = startMinutes; minute + AVAILABILITY_INTERVAL_MINUTES <= endMinutes; minute += AVAILABILITY_INTERVAL_MINUTES) {
+    const slotStartHours = Math.floor(minute / 60);
+    const slotStartMinutes = minute % 60;
+    const slotEndMinute = minute + AVAILABILITY_INTERVAL_MINUTES;
+    const slotEndHours = Math.floor(slotEndMinute / 60);
+    const slotEndMinutes = slotEndMinute % 60;
+
+    const startValue = `${String(slotStartHours).padStart(2, '0')}:${String(slotStartMinutes).padStart(2, '0')}`;
+    const endValue = `${String(slotEndHours).padStart(2, '0')}:${String(slotEndMinutes).padStart(2, '0')}`;
+
+    slots.push({
+      value: startValue,
+      label: `${formatStandardTime(startValue)} - ${formatStandardTime(endValue)}`,
+      sortMinutes: minute,
+    });
+  }
+
+  return slots;
 }
 
 function getArrayPayload<T>(payload: unknown): T[] {
@@ -355,6 +540,7 @@ export function CalendarView() {
   const [upcomingAppointments, setUpcomingAppointments] = useState<CalendarAppointment[]>([]);
   const [completedAppointments, setCompletedAppointments] = useState<CalendarAppointment[]>([]);
   const [cancelledAppointments, setCancelledAppointments] = useState<CalendarAppointment[]>([]);
+  const [availabilities, setAvailabilities] = useState<AvailabilityRow[]>([]);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<CalendarAppointment | null>(null);
   const [actionError, setActionError] = useState('');
@@ -378,11 +564,21 @@ export function CalendarView() {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
-      const response = await fetchWithApiFallback('/Appointments/calendar', { headers });
+      const [response, availabilityResponse] = await Promise.all([
+        fetchWithApiFallback('/Appointments/calendar', { headers }),
+        fetchWithApiFallback('/advisers/me/availabilities', { headers }),
+      ]);
       const payload = await response.json().catch(() => ({}));
+      const availabilityPayload = await availabilityResponse.json().catch(() => ([]));
 
       if (!response.ok) {
         throw new Error(getErrorMessage(payload, 'Unable to load appointment calendar.'));
+      }
+
+      if (availabilityResponse.ok) {
+        setAvailabilities(Array.isArray(availabilityPayload) ? availabilityPayload : []);
+      } else {
+        setAvailabilities([]);
       }
 
       const normalized = payload as CalendarPayload;
@@ -395,6 +591,7 @@ export function CalendarView() {
       setUpcomingAppointments([]);
       setCompletedAppointments([]);
       setCancelledAppointments([]);
+      setAvailabilities([]);
       return null;
     } finally {
       setIsLoading(false);
@@ -683,6 +880,101 @@ export function CalendarView() {
     }
 
     const appointmentId = getAppointmentId(selectedAppointment);
+
+  const rescheduleDayName = useMemo(() => {
+    if (!rescheduleDate) {
+      return '';
+    }
+
+    const parsed = new Date(rescheduleDate);
+    if (Number.isNaN(parsed.getTime())) {
+      return '';
+    }
+
+    return parsed.toLocaleDateString('en-US', { weekday: 'long' });
+  }, [rescheduleDate]);
+
+  const selectedDayAvailabilities = useMemo(() => {
+    if (!rescheduleDayName) {
+      return [] as AvailabilityRow[];
+    }
+
+    return availabilities.filter((row) => normalizeDay(String(row.dayOfWeek ?? row.DayOfWeek ?? '')) === rescheduleDayName);
+  }, [availabilities, rescheduleDayName]);
+
+  const bookedRescheduleTimes = useMemo(() => {
+    if (!rescheduleDate || !selectedAppointment) {
+      return new Set<string>();
+    }
+
+    const selectedDateValue = rescheduleDate.split('T')[0];
+    const selectedAppointmentId = getAppointmentId(selectedAppointment);
+    const selectedAdviserId = String(selectedAppointment.adviserId ?? selectedAppointment.AdviserId ?? '').trim();
+    const booked = new Set<string>();
+
+    [...upcomingAppointments, ...completedAppointments, ...cancelledAppointments].forEach((row) => {
+      const rowAppointmentId = getAppointmentId(row);
+      if (rowAppointmentId && rowAppointmentId === selectedAppointmentId) {
+        return;
+      }
+
+      const rowAdviserId = String(row.adviserId ?? row.AdviserId ?? '').trim();
+      if (selectedAdviserId && rowAdviserId && rowAdviserId !== selectedAdviserId) {
+        return;
+      }
+
+      const appointmentDate = String(row.appointmentDate ?? row.AppointmentDate ?? '').trim().split('T')[0];
+      if (!appointmentDate || appointmentDate !== selectedDateValue) {
+        return;
+      }
+
+      const appointmentTime = normalizeAppointmentTime(row.appointmentTime ?? row.AppointmentTime);
+      if (appointmentTime) {
+        booked.add(appointmentTime);
+      }
+    });
+
+    return booked;
+  }, [cancelledAppointments, completedAppointments, upcomingAppointments, rescheduleDate, selectedAppointment]);
+
+  const rescheduleSlots = useMemo(() => {
+    const slots = selectedDayAvailabilities.flatMap((row) => {
+      const explicitSlots = normalizeSlots(row.slots ?? row.Slots);
+      if (explicitSlots.length > 0) {
+        return explicitSlots;
+      }
+
+      const startTime = String(row.startTime ?? row.StartTime ?? '').trim();
+      const endTime = String(row.endTime ?? row.EndTime ?? '').trim();
+      if (startTime && endTime) {
+        return createThirtyMinuteSlots(startTime, endTime);
+      }
+
+      return [];
+    });
+
+    const unique = new Map<string, SlotOption>();
+    slots.forEach((slot) => {
+      if (!unique.has(slot.value)) {
+        unique.set(slot.value, slot);
+      }
+    });
+
+    return Array.from(unique.values())
+      .filter((slot) => !bookedRescheduleTimes.has(slot.value))
+      .sort((left, right) => left.sortMinutes - right.sortMinutes);
+  }, [bookedRescheduleTimes, selectedDayAvailabilities]);
+
+  useEffect(() => {
+    if (rescheduleSlots.length === 0) {
+      setRescheduleTime('');
+      return;
+    }
+
+    if (!rescheduleSlots.some((slot) => slot.value === rescheduleTime)) {
+      setRescheduleTime(rescheduleSlots[0].value);
+    }
+  }, [rescheduleSlots, rescheduleTime]);
     if (!appointmentId) {
       setActionError('Unable to save notes: missing appointment id.');
       return;
@@ -924,10 +1216,34 @@ export function CalendarView() {
               {isUpcomingSelected && (
                 <div className="space-y-3 rounded-md border border-yellow-200 bg-yellow-50 p-3">
                   <p className="text-sm font-semibold text-yellow-900">Reschedule Appointment</p>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)} disabled={isActionLoading} />
-                    <Input type="time" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)} disabled={isActionLoading} />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Input
+                      type="date"
+                      value={rescheduleDate}
+                      onChange={(e) => setRescheduleDate(e.target.value)}
+                      disabled={isActionLoading}
+                    />
+                    <div className="space-y-2">
+                      <Select value={rescheduleTime} onValueChange={setRescheduleTime} disabled={isActionLoading || rescheduleSlots.length === 0}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={rescheduleSlots.length === 0 ? 'No available time slots' : 'Select a 30-minute slot'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {rescheduleSlots.map((slot) => (
+                            <SelectItem key={slot.value} value={slot.value}>
+                              {slot.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-yellow-900/80">
+                        Reschedule uses the adviser/chairman availability for this day and keeps the appointment at 30 minutes.
+                      </p>
+                    </div>
                   </div>
+                  {rescheduleDayName && rescheduleSlots.length === 0 && (
+                    <p className="text-sm text-yellow-800">No available 30-minute slots on {rescheduleDayName}.</p>
+                  )}
                   <Button size="sm" variant="outline" onClick={handleReschedule} disabled={isActionLoading}>
                     Reschedule
                   </Button>

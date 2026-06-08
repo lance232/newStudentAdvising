@@ -30,6 +30,7 @@ interface StudentDirectoryRow {
   studentId: string;
   username: string;
   fullName: string;
+  yearLevelId: string;
   yearLevelName: string;
 }
 
@@ -38,6 +39,9 @@ interface AppointmentRow {
   studentName: string;
   dateLabel: string;
   status: string;
+  studentId?: string;
+  userId?: string;
+  sortTimestamp: number;
 }
 
 interface SummaryState {
@@ -111,6 +115,57 @@ function getErrorMessage(payload: unknown, fallback: string): string {
 
   const data = payload as { message?: string; error?: string; title?: string };
   return data.message || data.error || data.title || fallback;
+}
+
+function normalizeLookup(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function getSessionUser(): { id: string; username: string; name: string } {
+  const rawSession = sessionStorage.getItem("app_session")
+    ?? localStorage.getItem("app_session")
+    ?? "";
+
+  if (!rawSession) {
+    return { id: "", username: "", name: "" };
+  }
+
+  try {
+    const session = JSON.parse(rawSession) as {
+      currentUser?: { id?: string; username?: string; name?: string };
+    };
+
+    return {
+      id: String(session.currentUser?.id ?? "").trim(),
+      username: String(session.currentUser?.username ?? "").trim(),
+      name: String(session.currentUser?.name ?? "").trim(),
+    };
+  } catch {
+    return { id: "", username: "", name: "" };
+  }
+}
+
+function matchesSessionAdviser(adviser: any, sessionUser: { id: string; username: string; name: string }): boolean {
+  const identifiers = [
+    adviser?.id,
+    adviser?.adviserId,
+    adviser?.advisorId,
+    adviser?.userId,
+    adviser?.user?.userId,
+    adviser?.username,
+    adviser?.userName,
+    adviser?.user?.username,
+    adviser?.email,
+    adviser?.user?.email,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  const sessionIdentifiers = [sessionUser.id, sessionUser.username, sessionUser.name]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  return identifiers.some((identifier) => sessionIdentifiers.some((sessionValue) => normalizeLookup(sessionValue) === normalizeLookup(identifier)));
 }
 
 function formatDateLabel(value: unknown): string {
@@ -411,9 +466,56 @@ export function Dashboard({ isChairman = false, onOpenStudentsByGradeFilter, gra
         yearLevelName: String(item.yearLevelName ?? item.YearLevelName ?? item.yearLevel ?? "").trim(),
       }));
 
+      const sessionUser = getSessionUser();
+      const adviserRowsResponse = await fetchWithApiFallback('/Advisers', { headers });
+      const adviserRowsPayload = await adviserRowsResponse.json().catch(() => ([]));
+      const adviserRows = adviserRowsResponse.ok && Array.isArray(adviserRowsPayload) ? adviserRowsPayload : [];
+
+      const assignmentRowsResponse = await fetchWithApiFallback('/AdviserAssignments', { headers });
+      const assignmentRowsPayload = await assignmentRowsResponse.json().catch(() => ([]));
+      const assignmentRows = assignmentRowsResponse.ok && Array.isArray(assignmentRowsPayload) ? assignmentRowsPayload : [];
+
+      const currentAdviserKeys = new Set<string>();
+      adviserRows.forEach((adviser: any) => {
+        if (!matchesSessionAdviser(adviser, sessionUser)) {
+          return;
+        }
+
+        const id = String(adviser.id ?? '').trim();
+        const adviserId = String(adviser.adviserId ?? adviser.advisorId ?? '').trim();
+        const userId = String(adviser.userId ?? adviser.user?.userId ?? '').trim();
+        const username = String(adviser.username ?? adviser.userName ?? adviser.user?.username ?? '').trim();
+        [id, adviserId, userId, username].filter(Boolean).forEach((key) => currentAdviserKeys.add(key));
+      });
+
+      const assignedYearLevelIds = new Set<string>();
+      const assignedYearLevelNames = new Set<string>();
+      assignmentRows.forEach((assignment: any) => {
+        const assignmentAdviserKey = String(
+          assignment.adviserId
+          ?? assignment.advisorId
+          ?? assignment.adviserUserId
+          ?? assignment.userId
+          ?? '',
+        ).trim();
+
+        if (!assignmentAdviserKey || !currentAdviserKeys.has(assignmentAdviserKey)) {
+          return;
+        }
+
+        const yearLevelId = String(assignment.yearLevelId ?? assignment.yearlevelId ?? assignment.levelId ?? '').trim();
+        const yearLevelName = String(assignment.yearLevelName ?? assignment.YearLevelName ?? assignment.yearLevel ?? assignment.assignedYearLevel ?? '').trim();
+
+        if (yearLevelId) {
+          assignedYearLevelIds.add(yearLevelId);
+        }
+        if (yearLevelName) {
+          assignedYearLevelNames.add(normalizeLookup(yearLevelName));
+        }
+      });
+
       setSummary((prev) => ({
         ...prev,
-        students: isChairman ? prev.students : normalizedUsers.filter((row) => row.role === "STUDENT").length,
         advisers: normalizedUsers.filter((row) => row.role === "ADVISER").length,
         chairmen: normalizedUsers.filter((row) => row.role === "CHAIRMAN").length,
       }));
@@ -467,20 +569,18 @@ export function Dashboard({ isChairman = false, onOpenStudentsByGradeFilter, gra
           studentId: studentId || "Not Set",
           username: username || studentId || userId || 'Not Set',
           fullName,
+          yearLevelId: String(item.yearLevelId ?? item.YearLevelId ?? '').trim(),
           yearLevelName: String(item.yearLevelName ?? item.YearLevelName ?? "Not Set") || "Not Set",
         };
       });
 
-      const normalizedStudentsByUserId = new Map<string, StudentDirectoryRow>();
-      normalizedStudentsFromEndpoint.forEach((student) => {
-        if (student.userId && student.userId !== "Not Set") {
-          normalizedStudentsByUserId.set(student.userId, student);
-        }
-      });
-
       const normalizedStudents: StudentDirectoryRow[] = isChairman
         ? normalizedStudentsFromEndpoint
-        : normalizedStudentsFromEndpoint;
+        : normalizedStudentsFromEndpoint.filter((student) => {
+          const matchesYearLevelId = student.yearLevelId ? assignedYearLevelIds.has(student.yearLevelId) : false;
+          const matchesYearLevelName = student.yearLevelName ? assignedYearLevelNames.has(normalizeLookup(student.yearLevelName)) : false;
+          return assignedYearLevelIds.size === 0 && assignedYearLevelNames.size === 0 ? true : (matchesYearLevelId || matchesYearLevelName);
+        });
 
       setStudentsForChart(normalizedStudents);
 
@@ -489,25 +589,81 @@ export function Dashboard({ isChairman = false, onOpenStudentsByGradeFilter, gra
         students: normalizedStudents.length,
       }));
 
-      const appointmentsResponse = await fetchWithApiFallback("/Appointments", { headers });
-      const appointmentsPayload = await appointmentsResponse.json().catch(() => ([]));
+      const getAppointmentTimestamp = (item: any): number => {
+        const dateText = String(item.appointmentDate ?? item.AppointmentDate ?? '').trim();
+        const timeText = String(item.appointmentTime ?? item.AppointmentTime ?? '').trim();
+        const combined = dateText && timeText ? `${dateText.split('T')[0]}T${timeText}` : dateText;
+        const parsed = new Date(combined).getTime();
+        return Number.isNaN(parsed) ? 0 : parsed;
+      };
 
-      if (!appointmentsResponse.ok) {
-        setSummary((prev) => ({ ...prev, appointments: 0 }));
-        setRecentAppointments([]);
-        return;
+      let normalizedAppointments: AppointmentRow[] = [];
+      try {
+        const calendarResponse = await fetchWithApiFallback('/Appointments/calendar', { headers });
+        const calendarPayload = await calendarResponse.json().catch(() => ({}));
+
+        if (calendarResponse.ok) {
+          const calendar = calendarPayload as {
+            upcomingAppointments?: any[];
+            completedAppointments?: any[];
+            cancelledAppointments?: any[];
+            UpcomingAppointments?: any[];
+            CompletedAppointments?: any[];
+            CancelledAppointments?: any[];
+          };
+
+          normalizedAppointments = [
+            ...(calendar.upcomingAppointments ?? calendar.UpcomingAppointments ?? []),
+            ...(calendar.completedAppointments ?? calendar.CompletedAppointments ?? []),
+            ...(calendar.cancelledAppointments ?? calendar.CancelledAppointments ?? []),
+          ].map((item: any) => ({
+            appointmentId: item.appointmentId ?? item.id ?? item.AppointmentId ?? '',
+            studentId: String(item.studentId ?? item.StudentId ?? '').trim(),
+            adviserId: String(item.adviserId ?? item.AdviserId ?? '').trim(),
+            studentName: String(item.studentName ?? item.StudentName ?? item.student?.fullName ?? item.student?.name ?? item.userName ?? 'Student').trim() || 'Student',
+            dateLabel: formatDateLabel(item.appointmentDate ?? item.AppointmentDate ?? item.date ?? item.createdAt),
+            status: String(item.status ?? item.Status ?? 'Scheduled'),
+            appointmentDate: String(item.appointmentDate ?? item.AppointmentDate ?? '').trim(),
+            appointmentTime: String(item.appointmentTime ?? item.AppointmentTime ?? '').trim(),
+            sortTimestamp: getAppointmentTimestamp(item),
+          }));
+        }
+      } catch {
+        normalizedAppointments = [];
       }
 
-      const appointments = Array.isArray(appointmentsPayload) ? appointmentsPayload : [];
-      const normalizedAppointments: AppointmentRow[] = appointments.map((item: any) => ({
-        appointmentId: item.appointmentId ?? item.id ?? item.AppointmentId ?? "",
-        studentName: String(item.studentName ?? item.student?.fullName ?? item.student?.name ?? item.userName ?? "Student").trim() || "Student",
-        dateLabel: formatDateLabel(item.appointmentDate ?? item.date ?? item.createdAt ?? item.AppointmentDate),
-        status: String(item.status ?? item.Status ?? "Scheduled"),
-      }));
+      if (normalizedAppointments.length === 0) {
+        const appointmentsResponse = await fetchWithApiFallback("/Appointments", { headers });
+        const appointmentsPayload = await appointmentsResponse.json().catch(() => ([]));
 
-      setSummary((prev) => ({ ...prev, appointments: normalizedAppointments.length }));
-      setRecentAppointments(normalizedAppointments.slice(0, 6));
+        if (!appointmentsResponse.ok) {
+          setSummary((prev) => ({ ...prev, appointments: 0 }));
+          setRecentAppointments([]);
+          return;
+        }
+
+        const appointments = Array.isArray(appointmentsPayload) ? appointmentsPayload : [];
+        normalizedAppointments = appointments.map((item: any) => ({
+          appointmentId: item.appointmentId ?? item.id ?? item.AppointmentId ?? "",
+          studentId: String(item.studentId ?? item.StudentId ?? '').trim(),
+          adviserId: String(item.adviserId ?? item.AdviserId ?? '').trim(),
+          studentName: String(item.studentName ?? item.student?.fullName ?? item.student?.name ?? item.userName ?? "Student").trim() || "Student",
+          dateLabel: formatDateLabel(item.appointmentDate ?? item.date ?? item.createdAt ?? item.AppointmentDate),
+          status: String(item.status ?? item.Status ?? "Scheduled"),
+          appointmentDate: String(item.appointmentDate ?? item.AppointmentDate ?? '').trim(),
+          appointmentTime: String(item.appointmentTime ?? item.AppointmentTime ?? '').trim(),
+          sortTimestamp: getAppointmentTimestamp(item),
+        }));
+      }
+
+      const scopedAppointments = isChairman || currentAdviserKeys.size === 0
+        ? normalizedAppointments
+        : normalizedAppointments.filter((row) => currentAdviserKeys.has(String(row.adviserId ?? '').trim()));
+
+      const recentScopedAppointments = [...scopedAppointments].sort((left, right) => (right.sortTimestamp ?? 0) - (left.sortTimestamp ?? 0));
+
+      setSummary((prev) => ({ ...prev, appointments: scopedAppointments.length }));
+      setRecentAppointments(recentScopedAppointments.slice(0, 6));
 
       // Grade distribution pie chart.
       setGradeChartError("");
@@ -787,7 +943,7 @@ export function Dashboard({ isChairman = false, onOpenStudentsByGradeFilter, gra
           </CardHeader>
           <CardContent className="pt-6">
             {recentAppointments.length === 0 ? (
-              <p className="text-sm text-gray-500">No appointment records are available.</p>
+              <p className="text-sm text-gray-500">No recent appointments yet.</p>
             ) : (
               <div className="space-y-3">
                 {recentAppointments.map((row) => (
