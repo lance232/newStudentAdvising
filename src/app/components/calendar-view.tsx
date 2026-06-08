@@ -242,7 +242,7 @@ function formatStandardTime(rawTime: string): string {
 
   const hours24 = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  const period = hours24 >= 12 ? 'pm' : 'am';
+  const period = hours24 >= 12 ? 'PM' : 'AM';
   const hours12 = hours24 % 12 || 12;
   return `${hours12}:${String(mins).padStart(2, '0')} ${period}`;
 }
@@ -965,14 +965,6 @@ export function CalendarView() {
     return parsed.toLocaleDateString('en-US', { weekday: 'long' });
   }, [rescheduleDate]);
 
-  const selectedDayAvailabilities = useMemo(() => {
-    if (!rescheduleDayName) {
-      return [] as AvailabilityRow[];
-    }
-
-    return availabilities.filter((row) => normalizeDay(String(row.dayOfWeek ?? row.DayOfWeek ?? '')) === rescheduleDayName);
-  }, [availabilities, rescheduleDayName]);
-
   const bookedRescheduleTimes = useMemo(() => {
     const appointmentAdviserId = getAppointmentAdviserId(selectedAppointment);
     if (!rescheduleDate || !selectedAppointment || !appointmentAdviserId) {
@@ -1019,32 +1011,10 @@ export function CalendarView() {
   }, [cancelledAppointments, completedAppointments, upcomingAppointments, rescheduleDate, selectedAppointment]);
 
   const rescheduleSlots = useMemo(() => {
-    const slots = selectedDayAvailabilities.flatMap((row) => {
-      const explicitSlots = normalizeSlots(row.slots ?? row.Slots);
-      if (explicitSlots.length > 0) {
-        return explicitSlots;
-      }
-
-      const startTime = String(row.startTime ?? row.StartTime ?? '').trim();
-      const endTime = String(row.endTime ?? row.EndTime ?? '').trim();
-      if (startTime && endTime) {
-        return createThirtyMinuteSlots(startTime, endTime);
-      }
-
-      return [];
-    });
-
-    const unique = new Map<string, SlotOption>();
-    slots.forEach((slot) => {
-      if (!unique.has(slot.value)) {
-        unique.set(slot.value, slot);
-      }
-    });
-
-    return Array.from(unique.values())
+    return createThirtyMinuteSlots('07:00', '21:00')
       .filter((slot) => !bookedRescheduleTimes.has(slot.value))
       .sort((left, right) => left.sortMinutes - right.sortMinutes);
-  }, [bookedRescheduleTimes, selectedDayAvailabilities]);
+  }, [bookedRescheduleTimes]);
 
   useEffect(() => {
     if (rescheduleSlots.length === 0) {
@@ -1329,8 +1299,8 @@ export function CalendarView() {
                       </p>
                     </div>
                   </div>
-                  {rescheduleDayName && rescheduleSlots.length === 0 && (
-                    <p className="text-sm text-yellow-800">No available 30-minute slots on {rescheduleDayName}.</p>
+                  {rescheduleSlots.length === 0 && (
+                    <p className="text-sm text-yellow-800">No available 30-minute slots for this date.</p>
                   )}
                   <Button size="sm" variant="outline" onClick={handleReschedule} disabled={isActionLoading}>
                     Reschedule
