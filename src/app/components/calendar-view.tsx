@@ -234,6 +234,18 @@ function normalizeTimeValue(rawTime: string): string {
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
+function formatTimeForApi(rawTime: string): string {
+  const normalized = normalizeTimeValue(rawTime);
+  const minutes = parseTimeToMinutes(normalized);
+  if (minutes < 0) {
+    return normalized;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:00`;
+}
+
 function formatStandardTime(rawTime: string): string {
   const minutes = parseTimeToMinutes(rawTime);
   if (minutes < 0) {
@@ -737,7 +749,7 @@ export function CalendarView() {
     setActionError('');
     setActionSuccess('');
     setRescheduleDate(dateRaw ? dateRaw.split('T')[0] : '');
-    setRescheduleTime(timeRaw);
+    setRescheduleTime(normalizeTimeValue(timeRaw));
     setAdviserNotesText('');
     setDetailOpen(true);
   };
@@ -921,7 +933,7 @@ export function CalendarView() {
     await submitAppointmentAction(
       {
         AppointmentDate: rescheduleDate,
-        AppointmentTime: rescheduleTime,
+        AppointmentTime: formatTimeForApi(rescheduleTime),
         Status: 'Upcoming',
       },
       'Appointment rescheduled successfully.',
