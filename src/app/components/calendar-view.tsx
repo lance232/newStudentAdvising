@@ -439,6 +439,19 @@ function getAppointmentAdviserId(item: CalendarAppointment | null): string {
   ).trim();
 }
 
+function normalizeAppointmentDate(value: unknown): string {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    return '';
+  }
+
+  return text.split('T')[0];
+}
+
+function normalizeAppointmentStatus(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
 function normalizeAppointments(payload: CalendarPayload, key: 'upcoming' | 'completed' | 'cancelled'): CalendarAppointment[] {
   if (key === 'upcoming') {
     return payload.upcomingAppointments ?? payload.UpcomingAppointments ?? [];
@@ -966,7 +979,7 @@ export function CalendarView() {
       return new Set<string>();
     }
 
-    const selectedDateValue = rescheduleDate.split('T')[0];
+    const selectedDateValue = normalizeAppointmentDate(rescheduleDate);
     const selectedAppointmentId = getAppointmentId(selectedAppointment);
     const booked = new Set<string>();
 
@@ -981,7 +994,17 @@ export function CalendarView() {
         return;
       }
 
-      const appointmentDate = String(row.appointmentDate ?? row.AppointmentDate ?? '').trim().split('T')[0];
+      const status = normalizeAppointmentStatus(row.status ?? row.Status);
+      const isBlockedStatus = !status
+        || status.includes('upcoming')
+        || status.includes('complete')
+        || status.includes('appeared')
+        || status.includes('no-show');
+      if (!isBlockedStatus) {
+        return;
+      }
+
+      const appointmentDate = normalizeAppointmentDate(row.appointmentDate ?? row.AppointmentDate);
       if (!appointmentDate || appointmentDate !== selectedDateValue) {
         return;
       }
