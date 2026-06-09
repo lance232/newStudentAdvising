@@ -1105,7 +1105,6 @@ export function CalendarView() {
         throw new Error(getErrorMessage(payload, 'Unable to save advising notes.'));
       }
 
-      setActionSuccess('Advising notes saved successfully.');
       setDetailOpen(false);
       setSelectedAppointment(null);
       setAdviserNotesText('');
