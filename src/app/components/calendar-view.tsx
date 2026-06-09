@@ -1106,7 +1106,6 @@ export function CalendarView() {
       }
 
       setDetailOpen(false);
-      setSelectedAppointment(null);
       setAdviserNotesText('');
       setAppointmentNoteId('');
       await loadAppointmentNotes(appointmentId);
