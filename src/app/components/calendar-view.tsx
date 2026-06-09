@@ -1329,7 +1329,7 @@ export function CalendarView() {
                     ref={notesTextareaRef}
                     value={adviserNotesText}
                     onChange={(e) => setAdviserNotesText(e.target.value)}
-                    placeholder="Write notes for this completed appointment..."
+                    placeholder=""
                     className="min-h-[110px]"
                     disabled={isActionLoading}
                   />
