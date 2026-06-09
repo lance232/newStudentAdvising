@@ -1106,6 +1106,10 @@ export function CalendarView() {
       }
 
       setActionSuccess('Advising notes saved successfully.');
+      setDetailOpen(false);
+      setSelectedAppointment(null);
+      setAdviserNotesText('');
+      setAppointmentNoteId('');
       await loadAppointmentNotes(appointmentId);
       const refreshed = await loadCalendar();
       if (refreshed) {
